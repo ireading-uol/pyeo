@@ -35,6 +35,7 @@ import pyeo.filesystem_utilities
 import configparser
 import argparse
 import os
+from osgeo import gdal
 import datetime as dt
 
 
@@ -92,6 +93,7 @@ def rolling_detection(config_path,
         planet_image_dir = os.path.join(project_root, r"images/planet")
         merged_image_dir = os.path.join(project_root, r"images/bandmerged")
         stacked_image_dir = os.path.join(project_root, r"images/stacked")
+        mosaic_image_dir = os.path.join(project_root, r"images/stacked_mosaic")
         catagorised_image_dir = os.path.join(project_root, r"output/classified")
         probability_image_dir = os.path.join(project_root, r"output/probabilities")
         composite_dir = os.path.join(project_root, r"composite")
@@ -128,27 +130,25 @@ def rolling_detection(config_path,
                                                                                           composite_start_date,
                                                                                           composite_end_date,
                                                                                           conf, cloud_cover=cloud_cover)
-                if download_l2_data:
-                    log.info("Filtering query results for matching L1C and L2A products")
-                    composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
-                    log.info("{} products remain".format(len(composite_products)))
-                else:
-                    log.info("Filtering query results to L1C only")
-                    composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
+            if download_l2_data:
+                log.info("Filtering query results for matching L1C and L2A products")
+                composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
+                log.info("{} products remain".format(len(composite_products)))
+            else:
+                log.info("Filtering query results to L1C only")
+                composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
                 pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir,
-                                                            composite_l2_image_dir,
-                                                            source=download_source, user=sen_user, passwd=sen_pass,
-                                                            try_scihub_on_fail=True)
-            if do_preprocess or do_all and not download_l2_data:
+                                                        composite_l2_image_dir,
+                                                        source=download_source, user=sen_user, passwd=sen_pass,
+                                                        try_scihub_on_fail=True)
                 log.info("Atmospheric correction with sen2cor for L1C products")
                 pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, composite_l2_image_dir,
                                                                 sen2cor_path,
                                                                 delete_unprocessed_image=False)
-            if do_merge or do_all:
-                log.info("Aggregating composite layers")
-                pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, composite_merged_dir,
-                                                                composite_l1_image_dir,
-                                                                cloud_certainty_threshold, epsg=epsg, buffer_size=10)
+            log.info("Aggregating composite layers")
+            pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, composite_merged_dir,
+                                                            composite_l1_image_dir,
+                                                            cloud_certainty_threshold, epsg=epsg, buffer_size=10)
             log.info("Building initial cloud-free composite from directory {}".format(composite_dir))
             pyeo.raster_manipulation.composite_directory(composite_merged_dir, composite_dir, generate_date_images=True)
 
@@ -179,11 +179,6 @@ def rolling_detection(config_path,
             pyeo.raster_manipulation.preprocess_sen2_images(l2_image_dir, merged_image_dir, l1_image_dir,
                                                             cloud_certainty_threshold, epsg=epsg,
                                                             buffer_size=10)
-
-        # Apply a mask of pixels to be classified
-        if do_mask or do_all:
-            log.info("TODO: Applying the mask of pixels to be classified")
-            #pyeo.raster_manipulation.apply_mask_to_dir(mask_path, merged_image_dir, masked_dir)
 
         # Stack pairs of consecutive images into a single file
         if do_stack or do_all:
@@ -237,11 +232,16 @@ def rolling_detection(config_path,
         # Mosaic stacked layers
         if do_mosaic or do_all:
             log.info("Mosaicking stacked multitemporal images across tiles")
-            pyeo.raster_manipulation.mosaic_images(stacked_image_path, mosaic_image_path, format="GTiff", 
+            pyeo.raster_manipulation.mosaic_images(stacked_image_dir, mosaic_image_dir, format="GTiff", 
                                                    datatype=gdal.GDT_Int32, nodata=0)
 
         # Classify with composite
         if do_classify or do_all:
+            # Apply a mask of pixels to be classified
+            if do_mask or do_all:
+                log.info("Applying the specified mask of pixels to be classified")
+                pyeo.raster_manipulation.apply_mask_to_dir(mask_path, merged_image_dir, masked_dir)
+
             log.info("Classifying with composite")
             new_class_image = os.path.join(catagorised_image_dir,
                                            "class_{}".format(os.path.basename(new_stack_path)))

@@ -71,6 +71,7 @@ def create_file_structure(root):
         --L2A
         --bandmerged
         --stacked
+        --stacked_mosaic
         -composite
         --L1C
         --L2A
@@ -91,6 +92,7 @@ def create_file_structure(root):
         "images/L2A/",
         "images/bandmerged/",
         "images/stacked/",
+        "images/stacked_mosaic/",
         "images/planet/",
         "composite/",
         "composite/L1C",

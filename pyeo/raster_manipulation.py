@@ -114,22 +114,22 @@ Function reference
 """
 import sys
 import datetime
+import faulthandler
 import glob
 import logging
-import os
-import shutil
-import subprocess
-import re
-from tempfile import TemporaryDirectory
-
-from osgeo import gdal
 import numpy as np
+import ogr
+import os
+from osgeo import gdal
 from osgeo import gdal_array, osr, ogr
 from osgeo.gdal_array import NumericTypeCodeToGDALTypeCode, GDALTypeCodeToNumericTypeCode
-from skimage import morphology as morph
-
+import osr
 import pdb
-import faulthandler
+import re
+import shutil
+import subprocess
+from skimage import morphology as morph
+from tempfile import TemporaryDirectory
 
 from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from_polygon, write_geometry, \
     get_aoi_intersection, get_raster_bounds, align_bounds_to_whole_number, get_poly_bounding_rect, reproject_vector, \
@@ -137,7 +137,7 @@ from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from
 from pyeo.array_utilities import project_array
 from pyeo.filesystem_utilities import sort_by_timestamp, get_sen_2_tiles, get_l1_safe_file, get_sen_2_image_timestamp, \
     get_sen_2_image_tile, get_sen_2_granule_id, check_for_invalid_l2_data, get_mask_path, get_sen_2_baseline, \
-    get_safe_product_type
+    get_safe_product_type, get_change_detection_dates
 from pyeo.exceptions import CreateNewStacksException, StackImagesException, BadS2Exception, NonSquarePixelException
 
 log = logging.getLogger("pyeo")
@@ -578,18 +578,19 @@ def trim_image(in_raster_path, out_raster_path, polygon, format="GTiff"):
         in_raster = None
 
 
-def mosaic_images(raster_paths, out_raster_file, format="GTiff", datatype=gdal.GDT_Int32, nodata = 0):
+def mosaic_images(raster_path, out_raster_path, format="GTiff", datatype=gdal.GDT_Int32, nodata = 0):
     """
-    Mosaics multiple images with the same number of layers into one single image. Overwrites
-    overlapping pixels with the value furthest down raster_paths. Takes projection from the first
-    raster.
+    Mosaics multiple images in the directory raster_path with the same number of layers into one single image. 
+    Overwrites overlapping pixels with the value furthest down raster_paths. Takes projection from the first raster.
+    The output mosaic file will have a name that contains all unique tile IDs and the earliest and latest
+    acquisition date and time from the raster file names.
 
     Parameters
     ----------
-    raster_paths : str
-        A list of paths of raster to be mosaiced
-    out_raster_file : str
-        The path to the output file
+    raster_path : str
+        The directory path containing all Geotiff rasters to be mosaiced (all having the same number of bands)
+    out_raster_path : str
+        The path to the output directory for the new mosaic file
     format : str
         The image format of the output raster. Defaults to 'GTiff'
     datatype : gdal datatype
@@ -601,26 +602,48 @@ def mosaic_images(raster_paths, out_raster_file, format="GTiff", datatype=gdal.G
 
     # This, again, is very similar to stack_rasters
     log = logging.getLogger(__name__)
-    if len(raster_paths[0]) == 1:
-        log.info("WARNING: Mosaicking called with only one raster tile. Doing nothing.")
-        log.info(raster_paths)
+    log.info("--------------------------------------")
+    log.info("Beginning mosaicking of all tiff images in {}".format(raster_path))
+    raster_files = [raster_file for raster_file in os.listdir(raster_path) if raster_file.endswith('.tif') or raster_file.endswith('.tiff')]
+    rasters = [gdal.Open(os.path.join(raster_path,raster_file)) for raster_file in raster_files]
+    log.info("Found {} tiff files in directory {}".format(len(raster_files), raster_path))
+    projection = rasters[0].GetProjection()
+    in_gt = rasters[0].GetGeoTransform()
+    x_res = in_gt[1]
+    y_res = in_gt[5] * -1  # Y resolution in agt is -ve for Maths reasons
+    combined_polygon = align_bounds_to_whole_number(get_combined_polygon(rasters, geometry_mode='union'))
+    layers = rasters[0].RasterCount
+    tiles = out_raster_path + "/mosaic_"
+    all_tiles = get_sen_2_tiles(raster_path)
+    all_tiles_as_set = set(all_tiles) # a trick to remove duplicate strings from a list is to convert them to a set and back
+    all_tiles = list(all_tiles_as_set)
+    log.info("All tiles without duplicates: {}".format(all_tiles))
+    for t, tile in enumerate(all_tiles):
+        tiles = tiles + tile +"_"
+    out_raster_file = tiles
+    dt_str = []
+    for raster_file in raster_files:
+        date_time = get_change_detection_dates(raster_file)
+        for i, dt in enumerate(date_time):
+            dt_str.append(dt.strftime("%Y%m%d%H%M%S"))
+            if i > 1:
+                log.info("WARNING: More than two acquisition dates / times found in raster file name: {}".format(raster_file))
+            log.info("File {} contains imagery from acquisition date / time of {}".format(raster_file, dt.strftime("%Y%m%d%H%M%S")))
+    dt_str = sorted(dt_str)
+    dt_min = dt_str[0]
+    dt_max = dt_str[-1]
+    out_raster_file = out_raster_file + dt_min + "_" + dt_max + ".tif"
+    if os.path.isfile(out_raster_file):
+        log.info("Mosaic output file already exists. Skipping the mosaicking step. {}".format(out_raster_file))
     else:
-        log.info("Beginning mosaic")
-        rasters = [gdal.Open(raster_path) for raster_path in raster_paths]
-        projection = rasters[0].GetProjection()
-        in_gt = rasters[0].GetGeoTransform()
-        x_res = in_gt[1]
-        y_res = in_gt[5] * -1  # Y resolution in agt is -ve for Maths reasons
-        combined_polygon = align_bounds_to_whole_number(get_combined_polygon(rasters, geometry_mode='union'))
-        layers = rasters[0].RasterCount
         out_raster = create_new_image_from_polygon(combined_polygon, out_raster_file, x_res, y_res, layers,
                                                    projection, format, datatype, nodata=nodata)
-        log.info("New empty image created at {}".format(out_raster_file))
+        log.info("New empty image mosaic created at {}".format(out_raster_file))
         out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write)
         out_raster_array[...] = nodata
         old_nodata = nodata
         for i, raster in enumerate(rasters):
-            log.info("Now mosaicking raster no. {}".format(i))
+            log.info("Now mosaicking raster no. {} out of {}".format(i+1, len(rasters)))
             in_raster_array = raster.GetVirtualMemArray()
             if len(in_raster_array.shape) == 2:
                 in_raster_array = np.expand_dims(in_raster_array, 0)
@@ -2160,11 +2183,6 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
         Path and file name of the masked raster image file that will be created
 
     """
-
-    #TODO
-    #import gdal, ogr, osr, os
-    #import numpy as np
-
 
     def raster2array(rasterfn):
         raster = gdal.Open(rasterfn)
