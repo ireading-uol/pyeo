@@ -24,6 +24,7 @@ An app for providing continuous change detection. Runs the following algorithm
  Step 10: Update last_date of composite
 
  """
+import shutil
 import sys
 
 import pyeo.classification
@@ -94,6 +95,7 @@ def rolling_detection(config_path,
         merged_image_dir = os.path.join(project_root, r"images/bandmerged")
         stacked_image_dir = os.path.join(project_root, r"images/stacked")
         mosaic_image_dir = os.path.join(project_root, r"images/stacked_mosaic")
+        masked_stacked_image_dir = os.path.join(project_root, r"images/stacked_masked")
         catagorised_image_dir = os.path.join(project_root, r"output/classified")
         probability_image_dir = os.path.join(project_root, r"output/probabilities")
         composite_dir = os.path.join(project_root, r"composite")
@@ -188,7 +190,6 @@ def rolling_detection(config_path,
             try:
                 latest_composite_name = \
                     pyeo.filesystem_utilities.sort_by_timestamp(
-
                         [image_name for image_name in os.listdir(composite_dir) if image_name.endswith(".tif")],
                         recent_first=True
                     )[0]
@@ -212,22 +213,21 @@ def rolling_detection(config_path,
             log.info("Images to process: {}".format(images))
 
             for image in images:
-                log.info("Detecting change for {}".format(image))
                 new_image_path = os.path.join(merged_image_dir, image)
     
                 # Stack with preceding composite
-                if do_stack or do_all:
-                    try:
-                        latest_composite_path = pyeo.filesystem_utilities.get_preceding_image_path(new_image_path,
-                                                                                                   composite_dir)
-                    except FileNotFoundError:
-                        log.warning("No preceding composite found for {}, skipping.".format(new_image_path))
-                        continue
-                    log.info("Stacking {} with composite {}".format(new_image_path, latest_composite_path))
-                    new_stack_path = pyeo.raster_manipulation.stack_image_with_composite(new_image_path,
-                                                                                         latest_composite_path,
-                                                                                         stacked_image_dir,
-                                                                                         invert_stack=flip_stacks)
+                try:
+                    latest_composite_path = pyeo.filesystem_utilities.get_preceding_image_path(new_image_path,
+                                                                                               composite_dir)
+                except FileNotFoundError:
+                    log.warning("No preceding composite found for {}, skipping.".format(new_image_path))
+                    continue
+                log.info("Stacking image {} with latest available composite {}".format(image_path, latest_composite_path))
+                log.info("New stacked image will be created at {}".format(new_image_path))
+                new_stack_path = pyeo.raster_manipulation.stack_image_with_composite(new_image_path,
+                                                                                     latest_composite_path,
+                                                                                     stacked_image_dir,
+                                                                                     invert_stack=flip_stacks)
 
         # Mosaic stacked layers
         if do_mosaic or do_all:
@@ -235,23 +235,37 @@ def rolling_detection(config_path,
             pyeo.raster_manipulation.mosaic_images(stacked_image_dir, mosaic_image_dir, format="GTiff", 
                                                    datatype=gdal.GDT_Int32, nodata=0)
 
-        # Classify with composite
+        # Classify images stacked with composite
         if do_classify or do_all:
-            # Apply a mask of pixels to be classified
+            # Apply a mask of pixels to be classified to all images in the directory
             if do_mask or do_all:
                 log.info("Applying the specified mask of pixels to be classified")
-                pyeo.raster_manipulation.apply_mask_to_dir(mask_path, merged_image_dir, masked_dir)
+                log.info("Stacked image dir: {}".format(stacked_image_dir))
+                log.info("Mask file: {}".format(mask_path))
+                log.info("Masked image output dir: {}".format(masked_stacked_image_dir))
+                pyeo.raster_manipulation.apply_mask_to_dir(mask_path, stacked_image_dir, masked_stacked_image_dir)
+                log.info("Copying corresponding cloud masks from: {}".format(stacked_image_dir))
+                log.info("  to: {}".format(masked_stacked_image_dir))
+                cloudmask_files = [os.path.join(stacked_image_dir,f) for f in os.listdir(stacked_image_dir) \
+                    if f.endswith('.msk')]
+                for cloudmask_file in cloudmask_files:
+                    log.info("  Copying {} to {}".format(cloudmask_file, os.path.join(masked_stacked_image_dir,os.path.basename(cloudmask_file).split(".")[0]+"_masked.msk")))
+                    shutil.copy(cloudmask_file, os.path.join(masked_stacked_image_dir,os.path.basename(cloudmask_file).split(".")[0]+"_masked.msk"))
 
-            log.info("Classifying with composite")
-            new_class_image = os.path.join(catagorised_image_dir,
-                                           "class_{}".format(os.path.basename(new_stack_path)))
-            if build_prob_image:
-                new_prob_image = os.path.join(probability_image_dir,
-                                              "prob_{}".format(os.path.basename(new_stack_path)))
-            else:
-                new_prob_image = None
-            pyeo.classification.classify_image(new_stack_path, model_path, new_class_image, new_prob_image,
-                                               num_chunks=num_chunks, skip_existing=True, apply_mask=True)
+            log.info("Classifying image stacked with composite")
+            #TODO loop over all image files in the directory
+            masked_stacked_image_files = [os.path.join(masked_stacked_image_dir,f) \
+                for f in os.listdir(masked_stacked_image_dir) if f.endswith('.tif') or f.endswith('.tiff')]
+            for masked_stacked_image_file in masked_stacked_image_files:
+                new_class_image = os.path.join(catagorised_image_dir,
+                                               "class_{}".format(os.path.basename(masked_stacked_image_file)))
+                if build_prob_image:
+                    new_prob_image = os.path.join(probability_image_dir,
+                                                  "prob_{}".format(os.path.basename(masked_stacked_image_file)))
+                else:
+                    new_prob_image = None
+                pyeo.classification.classify_image(masked_stacked_image_file, model_path, new_class_image, new_prob_image,
+                                                   num_chunks=num_chunks, skip_existing=True, apply_mask=True)
 
         # Build new composite
         if do_update or do_all:

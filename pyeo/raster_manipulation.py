@@ -816,12 +816,16 @@ def reproject_image(in_raster, out_raster_path, new_projection,  driver = "GTiff
 
 
     """
+    log = logging.getLogger(__name__)
+
     if type(new_projection) is int:
         proj = osr.SpatialReference()
         proj.ImportFromEPSG(new_projection)
         new_projection = proj.ExportToWkt()
-    log = logging.getLogger(__name__)
-    log.info("Reprojecting {} to {}".format(in_raster, new_projection))
+    else:
+        proj = new_projection
+    epsg = proj.GetAttrValue('AUTHORITY',1)
+    log.info("Reprojecting {} to EPSG code {}".format(in_raster, epsg))
     if type(in_raster) is str:
         in_raster = gdal.Open(in_raster)
     res = in_raster.GetGeoTransform()[1]
@@ -861,7 +865,6 @@ def composite_directory(image_dir, composite_out_dir, format="GTiff", generate_d
     sorted_image_paths = [os.path.join(image_dir, image_name) for image_name
                           in sort_by_timestamp(os.listdir(image_dir), recent_first=False)  # Let's think about this
                           if image_name.endswith(".tif")]
-    log.info("*********************")
     log.info(sorted_image_paths)
     log.info(len(sorted_image_paths))
 
@@ -980,7 +983,7 @@ def clip_raster(raster_path, aoi_path, out_path, srs_id=4326, flip_x_y = False, 
     # TODO: Set values outside clip to 0 or to NaN - in irregular polygons
     # https://gis.stackexchange.com/questions/257257/how-to-use-gdal-warp-cutline-option
     with TemporaryDirectory(dir=os.getcwd()) as td:
-        log.info("Clipping {} with {}".format(raster_path, aoi_path))
+        log.info("Clipping {} with {} to {}".format(raster_path, aoi_path, out_path))
         #log.info("Making temp dir {}".format(td))
         raster = gdal.Open(raster_path)
         in_gt = raster.GetGeoTransform()
@@ -1020,7 +1023,7 @@ def clip_raster(raster_path, aoi_path, out_path, srs_id=4326, flip_x_y = False, 
 
 def clip_raster_to_intersection(raster_to_clip_path, extent_raster_path, out_raster_path, is_landsat=False):
     """
-    Clips one raster to the extent proivded by the other raster, and saves the result at temp_file.
+    Clips one raster to the extent provided by the other raster, and saves the result at temp_file.
     Assumes both raster_to_clip and extent_raster are in the same projection.
 
     Parameters
@@ -2004,11 +2007,8 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
         out_name = build_sen2cor_output_path(image, image_timestamp, get_sen2cor_version(sen2cor_path))
         out_path = os.path.join(out_directory, out_name)
         out_glob = out_path.rpartition("_")[0] + "*"
-
-        log.info("   **************************")
         log.info("   image path = " + image_path)
         log.info("   image time stamp = " + image_timestamp)
-        
         if glob.glob(out_glob):
             log.warning("{} exists. Skipping.".format(out_path))
             continue
@@ -2163,6 +2163,7 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
         buffer_mask_in_place(out_path, buffer_size)
     return out_path
 
+
 def apply_mask_to_image(mask_path, image_path, masked_image_path):
     """
     Applies a mask of 0 and 1 values to a raster image with one or more bands in Geotiff format
@@ -2184,13 +2185,14 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
 
     """
 
-    def raster2array(rasterfn):
-        raster = gdal.Open(rasterfn)
-        band = raster.GetRasterBand(1)
-        return band.ReadAsArray()
+    from osgeo import gdal_array
 
-    def array2raster(rasterfn,newRasterfn,array):
-        raster = gdal.Open(rasterfn)
+    def raster2array(raster_file):
+        rasterArray = gdal_array.LoadFile(raster_file)
+        return rasterArray
+
+    def array2raster(raster_file, new_raster_file, array):
+        raster = gdal.Open(raster_file)
         geotransform = raster.GetGeoTransform()
         originX = geotransform[0]
         originY = geotransform[3]
@@ -2198,16 +2200,17 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
         pixelHeight = geotransform[5]
         cols = raster.RasterXSize
         rows = raster.RasterYSize
-
+        bands = raster.RasterCount
         driver = gdal.GetDriverByName('GTiff')
-        outRaster = driver.Create(newRasterfn, cols, rows, 1, gdal.GDT_Float32)
+        outRaster = driver.Create(new_raster_file, cols, rows, bands, gdal.GDT_Float32)
         outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0, pixelHeight))
-        outband = outRaster.GetRasterBand(1)
-        outband.WriteArray(array)
+        for band in range(bands):
+            outband = outRaster.GetRasterBand(band+1)
+            outband.WriteArray(array[band])
+            outband.FlushCache()
         outRasterSRS = osr.SpatialReference()
         outRasterSRS.ImportFromWkt(raster.GetProjectionRef())
         outRaster.SetProjection(outRasterSRS.ExportToWkt())
-        outband.FlushCache()
     
     log = logging.getLogger(__name__)
     
@@ -2218,19 +2221,44 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
         raise FileNotFoundError("Mask not found: {}".format(mask_path))
         
     # make the name of the masked output image
-    masked_image_path = image_path.split(".")[0]+"_masked.tif"
-    log.info("   masked raster image is at {}.".format(masked_image_path))
+    #
+    log.info("   masked raster image will be created at {}.".format(masked_image_path))
     
-    # gdal apply mask to raster
+    # gdal read raster as array
     image_as_array = raster2array(image_path)
-
-    # get mask
+    # reproject the mask into the same shape and projection as the raster file if necessary
+    raster = gdal.Open(image_path)
+    geotransform_of_image = raster.GetGeoTransform()
+    bands = raster.RasterCount
+    cols = raster.RasterXSize
+    rows = raster.RasterYSize
+    pixelWidth = geotransform_of_image[1]
+    pixelHeight = geotransform_of_image[5]
+    mask = gdal.Open(mask_path)
+    geotransform_of_mask = mask.GetGeoTransform()
+    if geotransform_of_image != geotransform_of_mask:
+        with TemporaryDirectory(dir=os.getcwd()) as td:
+            temp_path_1 = os.path.join(td, "reproj_mask_temp.tif")
+            reproject_image(mask_path, temp_path_1, raster.GetProjectionRef(), do_post_resample = False)
+            temp_path_2 = os.path.join(td, os.path.basename(mask_path).split(".")[0]+"_warped_clipped.tif")
+            #log.info("   Input raster      : {}".format(temp_path_1))
+            #log.info("   Extent from raster: {}".format(image_path))
+            #log.info("   Output raster     : {}".format(temp_path_2))
+            clip_raster_to_intersection(temp_path_1, image_path, temp_path_2, is_landsat=False)
+            mask_path = mask_path.split(".")[0]+"_warped_clipped_resampled.tif"
+            ds = gdal.Open(mask_path)
+            gdal.Translate(temp_path_2, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear') 
+            ds = None
+    mask = gdal.Open(mask_path)
+    geotransform_of_mask = mask.GetGeoTransform()
+    if geotransform_of_image != geotransform_of_mask:
+        log.warning("Could not bring the mask file into exactly the same projection as the image. Check co-registration visually.")
+        log.warning(mask_path)
+        log.warning(geotransform_of_mask)
+        log.warning(geotransform_of_image)
     mask_as_array = raster2array(mask_path)
-
-    # Update pixels in the image with zero values in the mask array
-    image_as_array[mask_as_array == 0] = 0
-
-    # Write updated array to new raster
+    for band in range(bands):
+        image_as_array[band, mask_as_array == 0] = 0
     array2raster(image_path, masked_image_path, image_as_array)
 
 
@@ -2251,8 +2279,12 @@ def apply_mask_to_dir(mask_path, image_dir, masked_image_dir):
     """
 
     log = logging.getLogger(__name__)
-    for image_path in image_dir:
-        apply_mask_to_image(mask_path, image_path, masked_image_path)
+    log.info("Applying mask to all tiff files in dir: {}".format(image_dir))
+    image_files = [f for f in os.listdir(image_dir) if f.endswith('.tif') or f.endswith('.tiff')]
+    image_files = [f for f in image_files if "_masked" not in f] #remove already masked tiff files to avoid double-processing
+    for image_file in image_files:
+        masked_image_path = os.path.join(masked_image_dir, os.path.basename(image_file).split(".")[0]+"_masked.tif")
+        apply_mask_to_image(mask_path, image_dir+'/'+image_file, masked_image_path)
     
 
 def combine_masks(mask_paths, out_path, combination_func = 'and', geometry_func ="intersect"):
