@@ -822,10 +822,10 @@ def reproject_image(in_raster, out_raster_path, new_projection,  driver = "GTiff
         proj = osr.SpatialReference()
         proj.ImportFromEPSG(new_projection)
         new_projection = proj.ExportToWkt()
+        epsg = proj.GetAttrValue('AUTHORITY',1)
+        log.info("Reprojecting {} to EPSG code {}".format(in_raster, epsg))
     else:
-        proj = new_projection
-    epsg = proj.GetAttrValue('AUTHORITY',1)
-    log.info("Reprojecting {} to EPSG code {}".format(in_raster, epsg))
+        log.info("Reprojecting {} to {}".format(in_raster, new_projection))
     if type(in_raster) is str:
         in_raster = gdal.Open(in_raster)
     res = in_raster.GetGeoTransform()[1]
