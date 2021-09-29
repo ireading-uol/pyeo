@@ -867,10 +867,7 @@ def composite_directory(image_dir, composite_out_dir, format="GTiff", generate_d
                           if image_name.endswith(".tif")]
     log.info(sorted_image_paths)
     log.info(len(sorted_image_paths))
-
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
-    print(last_timestamp)
-    print(len(last_timestamp))
     composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
     composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
     return composite_out_path

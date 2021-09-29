@@ -147,6 +147,11 @@ def rolling_detection(config_path,
                 pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, composite_l2_image_dir,
                                                                 sen2cor_path,
                                                                 delete_unprocessed_image=False)
+            log.info("Downloading Sentinel-2 data")
+            pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir, 
+                                                        composite_l2_image_dir, download_source,
+                                                        user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
+
             log.info("Aggregating composite layers")
             pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, composite_merged_dir,
                                                             composite_l1_image_dir,
