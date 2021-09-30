@@ -98,10 +98,17 @@ except ImportError:
     pass
 
 
-def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100):
+def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0):
+    #TODO: Extend this function to allow for more than 10 search results by implementing pagination
+    # https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI?redirectedfrom=SciHubUserGuide.6OpenSearchAPI
+    # Results sets over the maximum can be obtained through paging of from different start values.
+    #    Page 1: https://scihub.copernicus.eu/dhus/search?start=0&rows=100&q=*
+    #    Page 2: https://scihub.copernicus.eu/dhus/search?start=100&rows=100&q=*
+    #    Page 3: https://scihub.copernicus.eu/dhus/search?start=200&rows=100&q=*
     session = requests.Session()
     session.auth = (user, passwd)
     rest_url = "https://apihub.copernicus.eu/apihub/search"
+
 
     search_params = {
         "platformname": "((Sentinel-2))",
@@ -113,10 +120,12 @@ def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100):
     search_string = " AND ".join([f"{term}:{query}" for term, query in search_params.items()])
 
     request_params = {
-        "q": search_string,
+        "q"    : search_string,
+        "rows" : 100,
+        "start": start_row,
     }
 
-    results = session.get(rest_url, params=request_params)
+    results = session.get(rest_url, timeout=600, params=request_params)
     if results.status_code >= 400:
         print("Bad request: code {}".format(results.status_code))
         print(results.content)
@@ -157,9 +166,10 @@ def _parse_element(element):
 def _sentinelsat_query(user, passwd, footprint_wkt, start_date, end_date, cloud=50):
     """
     Fetches a list of Sentinel-2 products
+    timeout option below indicates how long to wait for a response (in seconds)
     """
     # Originally by Ciaran Robb
-    api = SentinelAPI(user, passwd)
+    api = SentinelAPI(user, passwd, timeout=600)
     products = api.query(footprint_wkt,
                          date=(start_date, end_date), platformname="Sentinel-2",
                          cloudcoverpercentage="[0 TO {}]".format(cloud),
@@ -177,7 +187,7 @@ def _is_4326(geom):
         return False
 
 
-def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, query_func=_rest_query):
+def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, query_func=_rest_query, start_row=0):
     """
     Fetches a list of Sentinel-2 products
 
@@ -207,6 +217,8 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, quer
 
     queryfunc : function
                 A function that takes the following args: user, passwd, footprint_wkt, start_date, end_date, cloud
+
+    start_row : integer of the start row of the query results, can be 0,100,200,... if more than 100 results are returned
 
     Returns
     -------
@@ -240,7 +252,7 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, quer
 
         log.info("Sending Sentinel-2 query:\nfootprint: {}\nstart_date: {}\nend_date: {}\n cloud_cover: {} ".format(
             footprint, start_date, end_date, cloud))
-        return query_func(user, passwd, footprint, start_date, end_date, cloud)
+        return query_func(user, passwd, footprint, start_date, end_date, cloud, start_row)
 
 
 def _date_to_timestamp(date):
@@ -497,8 +509,17 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     password = conf['sent_2']['pass']
     start_timestamp = dt.datetime.strptime(start_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
     end_timestamp = dt.datetime.strptime(end_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
-    result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover)
-    log.info("Search returned {} images".format(len(result)))
+    #TODO: Loop over pages 
+    rolling_n = 0 # rolling number of search results
+    n = 100 # number of individual search results of each query
+    while n == 100:
+        result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover,
+                             start_row=int(rolling_n/100))
+        n = len(result)
+        rolling_n = rolling_n + n
+        log.info("This query returned {} images".format(len(result)))
+        if n ==100:
+            log.info("Submitting new query starting from image number {}".format(int(rolling_n/100)))
     return result
 
 
@@ -810,7 +831,7 @@ def query_for_corresponding_image(prod,conf):
         level = "Level-1C"
     user = conf['sent_2']['user']
     passwd = conf['sent_2']['pass']
-    api = SentinelAPI(user, passwd)
+    api = SentinelAPI(user, passwd, timeout=600)
     # These from https://sentinelsat.readthedocs.io/en/stable/api.html#search-sentinel-2-by-tile
     query_kwargs = {
         'platformname': 'Sentinel-2',
@@ -871,10 +892,11 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     this for further processing.
 
     """
-    api = SentinelAPI(user, passwd)
+    api = SentinelAPI(user, passwd, timeout=600)
     api.api_url = "https://apihub.copernicus.eu/apihub/"
     log.info("Downloading {} from scihub".format(product_uuid))
-    prod = api.download(product_uuid, out_folder)
+    #TODO: update this line with long-term-archive parameters that have been added to the Copernicus Hub API
+    prod = api.download(product_uuid, out_folder, max_attempts=50)
     if not prod:
         log.error("{} not found. Please check.".format(product_uuid))
     if not prod["Online"]:

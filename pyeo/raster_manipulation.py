@@ -2001,9 +2001,13 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
         log.info("Atmospheric correction of {}".format(image))
         image_path = os.path.join(in_directory, image)
         image_timestamp = datetime.datetime.now().strftime(r"%Y%m%dT%H%M%S")
+        log.info("   sen2cor path = " + sen2cor_path)
         out_name = build_sen2cor_output_path(image, image_timestamp, get_sen2cor_version(sen2cor_path))
+        log.info("   output name = " + out_name)
         out_path = os.path.join(out_directory, out_name)
+        log.info("   output path = " + out_path)
         out_glob = out_path.rpartition("_")[0] + "*"
+        log.info("   sen2cor path = " + sen2cor_path)
         log.info("   image path = " + image_path)
         log.info("   image time stamp = " + image_timestamp)
         if glob.glob(out_glob):
