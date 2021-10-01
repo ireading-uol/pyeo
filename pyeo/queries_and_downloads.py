@@ -137,8 +137,8 @@ def _rest_out_to_json(result):
     root = ElementTree.fromstring(result.content.replace(b"\n", b""))
     total_results = int(root.find("{http://a9.com/-/spec/opensearch/1.1/}totalResults").text)
     if total_results > 10:
-        log.warning("Local querying with more than 10 search results should work now. \
-            If not, please log it as a todo issue on Github.")
+        log.info("Local querying with more than 10 search results should work now.")
+        log.info("If not, please log it as a todo issue on Github.")
     if total_results == 0:
         log.warning("Query produced no results.")
     out = {}
@@ -216,7 +216,7 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, quer
     cloud : int, optional
             The maximum cloud clover percentage (as calculated by Copernicus) to download. Defaults to 100%
 
-    queryfunc : function
+    query_func : function
                 A function that takes the following args: user, passwd, footprint_wkt, start_date, end_date, cloud
 
     start_row : integer of the start row of the query results, can be 0,100,200,... if more than 100 results are returned
@@ -516,16 +516,18 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     while n == 100:
         result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover,
                              start_row=int(rolling_n/100))
-        if n==100:
+        try:
+            rolling_result
+        except NameError:
             rolling_result = result # initialise on first query
         else:
-            rolling_result = pd.concat([rolling_result, result]) # concatenate the new results with the previous dataframe
-
-        n = len(result)
-        rolling_n = rolling_n + n
-        log.info("This query returned {} images".format(len(rolling_result)))
+            rolling_result =  {**rolling_result, **result} # concatenate the new results with the previous dataframe
+            n = len(result)
+            print(type(result))
+            rolling_n = rolling_n + n
+            log.info("This query returned {} new images that have been added to the total of {}".format(len(result), len(rolling_result)))
         if n ==100:
-            log.info("Submitting new query starting from image number {}".format(int(rolling_n/100)))
+            log.info("Submitting new query starting from image number {}".format(rolling_n))
     return rolling_result
 
 
