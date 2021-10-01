@@ -99,7 +99,7 @@ except ImportError:
 
 
 def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0):
-    #TODO: Extend this function to allow for more than 10 search results by implementing pagination
+    #TODO: Test the solution to extend this function to allow for more than 10 search results by implementing pagination
     # https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI?redirectedfrom=SciHubUserGuide.6OpenSearchAPI
     # Results sets over the maximum can be obtained through paging of from different start values.
     #    Page 1: https://scihub.copernicus.eu/dhus/search?start=0&rows=100&q=*
@@ -509,18 +509,23 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     password = conf['sent_2']['pass']
     start_timestamp = dt.datetime.strptime(start_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
     end_timestamp = dt.datetime.strptime(end_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
-    #TODO: Loop over pages 
+    #TODO: Test that the loop over pages works for over 100 results
     rolling_n = 0 # rolling number of search results
     n = 100 # number of individual search results of each query
     while n == 100:
         result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover,
                              start_row=int(rolling_n/100))
+        if n==100:
+            rolling_result = result # initialise on first query
+        else:
+            rolling_result = pd.concat([rolling_result, result]) # concatenate the new results with the previous dataframe
+
         n = len(result)
         rolling_n = rolling_n + n
-        log.info("This query returned {} images".format(len(result)))
+        log.info("This query returned {} images".format(len(rolling_result)))
         if n ==100:
             log.info("Submitting new query starting from image number {}".format(int(rolling_n/100)))
-    return result
+    return rolling_result
 
 
 def filter_to_l1_data(query_output):
@@ -896,7 +901,7 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     api.api_url = "https://apihub.copernicus.eu/apihub/"
     log.info("Downloading {} from scihub".format(product_uuid))
     #TODO: update this line with long-term-archive parameters that have been added to the Copernicus Hub API
-    prod = api.download(product_uuid, out_folder, max_attempts=50)
+    prod = api.download(product_uuid, out_folder)
     if not prod:
         log.error("{} not found. Please check.".format(product_uuid))
     if not prod["Online"]:
