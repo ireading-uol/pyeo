@@ -126,7 +126,7 @@ def rolling_detection(config_path,
             log.info("------------------------------------------")
             log.info("Building image composite")
             if do_download or do_all:
-                log.info("Searching for images for initial composite between {} and {} with cloud cover <= ()".format(
+                log.info("Searching for images for initial composite between {} and {} with cloud cover <= {}".format(
                     composite_start_date, composite_end_date, cloud_cover))
                 composite_products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
                                                                                           composite_start_date,

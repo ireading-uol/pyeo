@@ -137,7 +137,8 @@ def _rest_out_to_json(result):
     root = ElementTree.fromstring(result.content.replace(b"\n", b""))
     total_results = int(root.find("{http://a9.com/-/spec/opensearch/1.1/}totalResults").text)
     if total_results > 10:
-        log.warning("Local querying does not yet return more than 10 entries in search.")
+        log.warning("Local querying with more than 10 search results should work now. \
+            If not, please log it as a todo issue on Github.")
     if total_results == 0:
         log.warning("Query produced no results.")
     out = {}
@@ -163,7 +164,7 @@ def _parse_element(element):
 
 
 
-def _sentinelsat_query(user, passwd, footprint_wkt, start_date, end_date, cloud=50):
+def _sentinelsat_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100):
     """
     Fetches a list of Sentinel-2 products
     timeout option below indicates how long to wait for a response (in seconds)
@@ -213,7 +214,7 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, quer
                See https://www.w3.org/TR/NOTE-datetime, or use check_for_s2_data_by_date
 
     cloud : int, optional
-            The maximum cloud clover percentage (as calculated by Copernicus) to download. Defaults to 50%
+            The maximum cloud clover percentage (as calculated by Copernicus) to download. Defaults to 100%
 
     queryfunc : function
                 A function that takes the following args: user, passwd, footprint_wkt, start_date, end_date, cloud
