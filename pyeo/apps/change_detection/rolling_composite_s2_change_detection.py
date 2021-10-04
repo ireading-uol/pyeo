@@ -227,7 +227,7 @@ def rolling_detection(config_path,
                 except FileNotFoundError:
                     log.warning("No preceding composite found for {}, skipping.".format(new_image_path))
                     continue
-                log.info("Stacking image {} with latest available composite {}".format(image_path, latest_composite_path))
+                log.info("Stacking image {} with latest available composite {} with bands from both dates".format(new_image_path, latest_composite_path))
                 log.info("New stacked image will be created at {}".format(new_image_path))
                 new_stack_path = pyeo.raster_manipulation.stack_image_with_composite(new_image_path,
                                                                                      latest_composite_path,
