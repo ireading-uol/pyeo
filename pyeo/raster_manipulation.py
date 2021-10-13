@@ -793,9 +793,7 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
         if missing_data_value is not None:
             in_array = np.ma.masked_equal(in_array, missing_data_value)
         result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
-                      (in_array.min(), in_array.max(), in_array.mean(), in_array.std())})
-        #stats = in_raster.GetRasterBand(band+1).GetStatistics(0,1)
-        #result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % (stats[0], stats[1], stats[2], stats[3])})
+                      (np.nanmin(in_array), np.nanmax(in_array), np.nanmean(in_array), np.nanstd(in_array))})
     log.info("[ RASTER FILE NAME ] = {}".format(in_raster_path))
     log.info("[ RASTER STATS ] :")
     for key, item in result.items():
@@ -845,7 +843,7 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
 
     def median_of_raster_list(in_raster_path_list, out_raster_path, band=1, missing_data_value=0, format='GTiff'):
         """
-        Calculates the median of each pixel in a list of rasters of the same dimensions and map projection.
+        Calculates the median of each pixel in a list of rasters with one band of the same dimensions and map projection.
         Excludes missing data values from the calculations.
 
         Parameters
@@ -870,15 +868,21 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             res.append(ds.GetRasterBand(band).ReadAsArray())
             ds = None
         stacked = np.dstack(res)
-        stacked[np.where(stacked == missing_data_value)] = np.nan
-        #stacked[np.where(stacked == missing_data_value)] = 0
+        #stacked[np.where(stacked == missing_data_value)] = np.nan
+        if missing_data_value is not None:
+            stacked = np.ma.masked_equal(stacked, missing_data_value)
+
+        log.info("********************** stacked raster shape: {}".format(stacked.shape))
+
         median_raster = np.nanmedian(stacked, axis=-1)
+
+        log.info("********************** median raster shape: {}".format(median_raster.shape))
+
+        # copy metadata from first raster in the list
         in_raster = gdal.Open(in_raster_path_list[0])
         driver = gdal.GetDriverByName(format)
         projection = in_raster.GetProjection()
         in_gt = in_raster.GetGeoTransform()
-        x_res = in_gt[1]
-        y_res = in_gt[5] * -1
         temp_band = in_raster.GetRasterBand(1)
         datatype = temp_band.DataType
         xsize = in_raster.RasterXSize
