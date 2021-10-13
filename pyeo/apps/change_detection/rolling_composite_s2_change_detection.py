@@ -125,42 +125,42 @@ def rolling_detection(config_path,
         if build_composite:
             log.info("------------------------------------------")
             log.info("Building image composite")
-            if do_download or do_all:
+            if do_download or download_l2_data or do_all:
                 log.info("Searching for images for initial composite between {} and {} with cloud cover <= {}".format(
                     composite_start_date, composite_end_date, cloud_cover))
                 composite_products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
                                                                                           composite_start_date,
                                                                                           composite_end_date,
                                                                                           conf, cloud_cover=cloud_cover)
-            if download_l2_data:
-                log.info("Filtering query results for matching L1C and L2A products")
-                composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
-                log.info("{} products remain".format(len(composite_products)))
-            else:
-                log.info("Filtering query results to L1C only")
-                composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
-                pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir,
-                                                        composite_l2_image_dir,
-                                                        source=download_source, user=sen_user, passwd=sen_pass,
-                                                        try_scihub_on_fail=True)
-                log.info("Atmospheric correction with sen2cor for L1C products")
-                pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, composite_l2_image_dir,
-                                                                sen2cor_path,
-                                                                delete_unprocessed_image=False)
-            log.info("Downloading Sentinel-2 data")
-            pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir, 
-                                                        composite_l2_image_dir, download_source,
-                                                        user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
+                if download_l2_data:
+                    log.info("Filtering query results for matching L1C and L2A products")
+                    composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
+                    log.info("{} products remain".format(len(composite_products)))
+                else:
+                    log.info("Filtering query results to L1C only")
+                    composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
+                    pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir,
+                                                                composite_l2_image_dir,
+                                                                source=download_source, user=sen_user, passwd=sen_pass,
+                                                                try_scihub_on_fail=True)
+                    log.info("Atmospheric correction with sen2cor for L1C products")
+                    pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, composite_l2_image_dir,
+                                                                    sen2cor_path,
+                                                                    delete_unprocessed_image=False)
+                log.info("Downloading Sentinel-2 data")
+                pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir, 
+                                                            composite_l2_image_dir, download_source,
+                                                            user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
 
-            log.info("Aggregating composite layers")
+            log.info("Merging raster bands into single files for each image")
             pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, composite_merged_dir,
                                                             composite_l1_image_dir,
                                                             cloud_certainty_threshold, epsg=epsg, buffer_size=10)
             log.info("Building initial cloud-free composite from directory {}".format(composite_dir))
-            pyeo.raster_manipulation.composite_directory(composite_merged_dir, composite_dir, generate_date_images=True)
+            pyeo.raster_manipulation.clever_composite_directory(composite_merged_dir, composite_dir, generate_date_images=True)
 
         # Query and download all images since last composite
-        if do_download or do_all:
+        if do_download or download_l2_data or do_all:
             products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path, start_date, end_date, conf,
                                                                             cloud_cover=cloud_cover)
             if download_l2_data:

@@ -519,12 +519,13 @@ def average_images(raster_paths, out_raster_path,
                          in_y_min: in_y_max,
                          in_x_min: in_x_max
                          ]
-        out_raster_view[...] = (out_raster_view+in_raster_view)/2   # Sequential mean
+        out_raster_view[...] = (out_raster_view+in_raster_view) # add up
         out_raster_view = None
         in_raster_view = None
         present_layer += in_raster.RasterCount
         in_raster_array = None
         in_raster = None
+    out_raster_view[...] = out_raster_view / len(rasters) # calculate average
     out_raster_array = None
     out_raster = None
 
@@ -763,6 +764,201 @@ def composite_images_with_mask(in_raster_path_list, composite_out_path, format="
     return composite_out_path
 
 
+def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_value=0):
+    """
+    Gets simple statistics from a raster file and prints them to the log file
+
+    Parameters
+    ----------
+    in_raster_path : str
+        A path to a raster file
+
+    format : str, optional
+        The gdal format of the image. Defaults to "GTiff"
+
+    missing_data_value : int, optional
+        The encoding of missing values in the raster that will be omitted from the calculations
+
+    """
+
+    log = logging.getLogger(__name__)
+    driver = gdal.GetDriverByName(format)
+    in_raster = gdal.Open(in_raster_path)
+    n_bands = in_raster.RasterCount
+    result = {}
+    for band in range(n_bands):
+        # Read into NumPy array
+        raster_band = in_raster.GetRasterBand(band+1)
+        in_array = raster_band.ReadAsArray()
+        if missing_data_value is not None:
+            in_array = np.ma.masked_equal(in_array, missing_data_value)
+        result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
+                      (in_array.min(), in_array.max(), in_array.mean(), in_array.std())})
+        #stats = in_raster.GetRasterBand(band+1).GetStatistics(0,1)
+        #result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % (stats[0], stats[1], stats[2], stats[3])})
+    log.info("[ RASTER FILE NAME ] = {}".format(in_raster_path))
+    log.info("[ RASTER STATS ] :")
+    for key, item in result.items():
+        log.info("   {} : {}".format(key, item))
+
+
+def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, format="GTiff", generate_date_image=True,
+                                      missing_data_value=0):
+    """
+    DEVELOPMENT VERSION of composite_images_with_mask
+    #TODO: Test it
+
+    Works down in_raster_path_list, updating pixels in composite_out_path if not masked. Will also create a mask and
+    (optionally) a date image in the same directory.
+
+    Parameters
+    ----------
+    in_raster_path_list : list of str
+        A list of paths to rasters.
+    composite_out_path : str
+        The path of the output image
+    format : str, optional
+        The gdal format of the image. Defaults to "GTiff"
+    generate_date_image : bool, optional
+        If true, generates a single-layer raster containing the dates of each image detected - see below.
+    missing_data_value : int, optional
+        Value for no data encoding, will be ignored in calculating the median
+
+    Returns
+    -------
+    composite_path : str
+        The path to the composite.
+
+    Notes
+    -----
+    Masks are assumed to be a multiplicative .msk file with the same path as their corresponding image; see REFERENCE.
+    All images must have the same number of layers and resolution, but do not have to be perfectly co-registered. 
+    If it does not exist, composite_out_path will be created. Takes projection, resolution, etc. from first band
+    of first raster in list. Will reproject images and masks if they do not match initial raster.
+
+    If generate_date_images is True, an raster ending with the suffix .date will be created; each pixel will contain the
+    timestamp (yyyymmdd) of the date that pixel was last seen in the composite.
+
+    #TODO: Change the date image to contain Julian date numbers.
+
+    """
+
+    def median_of_raster_list(in_raster_path_list, out_raster_path, band=1, missing_data_value=0, format='GTiff'):
+        """
+        Calculates the median of each pixel in a list of rasters of the same dimensions and map projection.
+        Excludes missing data values from the calculations.
+
+        Parameters
+        ----------
+        in_raster_path_list : list of str
+            A list of paths to rasters
+        out_raster_path : str
+            The path of the output raster
+        band : int, optional
+            The number of the band to be processed, starting at 1. Defaults to band 1.
+        missing_data_value : number, optional
+            Value for no data encoding, will be ignored in calculating the median
+        format : str, optional
+            Raster format for GDAL
+
+        NOTE: We build one large np array of all images (this requires that all data fits in memory)
+        """
+
+        res = []
+        for f in in_raster_path_list:
+            ds = gdal.Open(f)
+            res.append(ds.GetRasterBand(band).ReadAsArray())
+            ds = None
+        stacked = np.dstack(res)
+        stacked[np.where(stacked == missing_data_value)] = np.nan
+        #stacked[np.where(stacked == missing_data_value)] = 0
+        median_raster = np.nanmedian(stacked, axis=-1)
+        in_raster = gdal.Open(in_raster_path_list[0])
+        driver = gdal.GetDriverByName(format)
+        projection = in_raster.GetProjection()
+        in_gt = in_raster.GetGeoTransform()
+        x_res = in_gt[1]
+        y_res = in_gt[5] * -1
+        temp_band = in_raster.GetRasterBand(1)
+        datatype = temp_band.DataType
+        xsize = in_raster.RasterXSize
+        ysize = in_raster.RasterYSize
+        temp_band = None
+        in_raster = None
+        result = driver.Create(out_raster_path, xsize=xsize, ysize=ysize, bands=1, eType=datatype)
+        result.SetGeoTransform(in_gt)
+        result.SetProjection(projection)
+        result.GetRasterBand(1).WriteArray(median_raster)
+        result = None        
+
+
+    log = logging.getLogger(__name__)
+    driver = gdal.GetDriverByName(format)
+    in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
+    projection = in_raster_list[0].GetProjection()
+    in_gt = in_raster_list[0].GetGeoTransform()
+    x_res = in_gt[1]
+    y_res = in_gt[5] * -1
+    n_bands = in_raster_list[0].RasterCount
+    temp_band = in_raster_list[0].GetRasterBand(1)
+    datatype = temp_band.DataType
+    temp_band = None
+
+    # Creating output image + array
+    log.info("-------------------------------------------------")
+    log.info("Creating median composite at {}".format(composite_out_path))
+    log.info("Using {} input raster files:".format(len(in_raster_path_list)))
+    for i in in_raster_path_list:
+        log.info("   {}".format(i))
+
+    mask_paths = []
+    for i, in_raster in enumerate(in_raster_path_list):
+        mask_paths.append(get_mask_path(in_raster_path_list[i]))
+    mask_paths = [f for f in mask_paths if "_masked" not in f] #remove already masked tiff files to avoid double-processing
+    log.info("Mask paths for input raster files:")
+    for i in mask_paths:
+        log.info("   {}".format(i))
+
+    # apply mask to each raster file
+    masked_image_paths = []
+    image_files = [f for f in in_raster_path_list if "_masked" not in f] #remove already masked tiff files to avoid double-processing
+    for i, in_raster in enumerate(image_files):
+        masked_image_path = in_raster.split('.')[0] + '_masked.tif'
+        masked_image_paths.append(masked_image_path)
+        log.info('Producing cloud-masked image file: {}'.format(masked_image_path))
+        log.info('   from mask: {}'.format(mask_paths[i]))
+        log.info('   and raster: {}'.format(in_raster))
+        if os.path.exists(masked_image_path):
+            log.warning("Output file already exists, skipping the masking step.")
+        else:    
+            apply_mask_to_image(mask_paths[i], in_raster, masked_image_path)
+        # log some image stats
+        get_stats_from_raster_file(in_raster)
+        get_stats_from_raster_file(masked_image_path)
+
+    # use raster stacking to calculate the median over all masked raster files and all 4 bands
+    #TODO: get number of bands from first raster file
+    tmpfiles = []
+    for band in range(4):
+        tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
+        tmpfiles.append(tmpfile)
+        median_of_raster_list(masked_image_paths, tmpfile, band=band+1, missing_data_value=missing_data_value)
+        log.info('Band {} - calculating median composite across all images using raster stacking'.format(band))
+        log.info('Ignoring missing data value of {}'.format(missing_data_value))
+        # log some image stats
+        get_stats_from_raster_file(tmpfile)
+
+    # Aggretating band composites into a single tiff file
+    stack_images(tmpfiles, composite_out_path, geometry_mode="intersect")
+    get_stats_from_raster_file(composite_out_path)
+    for tmpfile in tmpfiles:
+        os.remove(tmpfile)
+    log.info("Composite done")
+    log.info("Creating composite mask at {}".format(composite_out_path.rsplit(".")[0]+".msk"))
+    combine_masks(mask_paths, composite_out_path.rsplit(".")[0]+".msk", combination_func='or', geometry_func="union")
+    return composite_out_path
+
+
 def reproject_directory(in_dir, out_dir, new_projection, extension = '.tif'):
     """
     Reprojects every file ending with extension to new_projection and saves in out_dir
@@ -872,6 +1068,48 @@ def composite_directory(image_dir, composite_out_dir, format="GTiff", generate_d
     composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
     return composite_out_path
 
+def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", generate_date_images=False):
+    """
+    WARNING: DEVELOPMENT VERSION OF THE FUNCTION composite_directory
+    #TODO: finish off and test it
+
+    Using composite_images_with_mask, creates a composite containing every image in image_dir. This will
+      place a file named composite_[last image date].tif inside composite_out_dir
+
+    Parameters
+    ----------
+    image_dir : str
+        The directory containing the rasters and associated .msk files to be composited.
+    composite_out_dir : str
+        The directory that will contain the final composite
+    format : str, optional
+        The raster format of the output image. Defaults to 'GTiff'
+    generate_date_images : bool, optional
+        If true, generates a corresponding date image for the composite. See docs for composite_images_with_mask.
+        Defaults to False.
+
+    Returns
+    -------
+    composite_out_path : str
+        The path to the new composite
+
+    """
+    log = logging.getLogger(__name__)
+    log.info("Cleverly compositing all images in directory {}".format(image_dir))
+    sorted_image_paths = [os.path.join(image_dir, image_name) for image_name
+                          in sort_by_timestamp(os.listdir(image_dir), recent_first=False)
+                          if image_name.endswith(".tif")]
+
+    sorted_image_paths = [f for f in sorted_image_paths if "_masked" not in f] #remove already masked tiff files to avoid double-processing
+
+    # get timestamp of most recent image in the directory
+    for i in range(len(sorted_image_paths)):
+        timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[i]))
+        #log.info("Image number {} has time stamp {}".format(i+1, timestamp))
+    last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
+    composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
+    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
+    return composite_out_path
 
 def flatten_probability_image(prob_image, out_path):
     """
@@ -974,9 +1212,9 @@ def clip_raster(raster_path, aoi_path, out_path, srs_id=4326, flip_x_y = False, 
         If True, swaps the x and y axis of the raster image before clipping. For compatability with Landsat.
         Default is False.
     dest_nodata : number, optional
-        The fill value for outside of the clipped area. Deafults to 0.
-
+        The fill value for outside of the clipped area. Defaults to 0.
     """
+
     # TODO: Set values outside clip to 0 or to NaN - in irregular polygons
     # https://gis.stackexchange.com/questions/257257/how-to-use-gdal-warp-cutline-option
     with TemporaryDirectory(dir=os.getcwd()) as td:
@@ -1046,7 +1284,7 @@ def clip_raster_to_intersection(raster_to_clip_path, extent_raster_path, out_ras
 def create_new_image_from_polygon(polygon, out_path, x_res, y_res, bands,
                            projection, format="GTiff", datatype = gdal.GDT_Int32, nodata = -9999):
     """
-    Returns an empty image that covers the extent of the imput polygon.
+    Returns an empty image that covers the extent of the input polygon.
 
     Parameters
     ----------
@@ -2222,7 +2460,6 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
         raise FileNotFoundError("Mask not found: {}".format(mask_path))
         
     # make the name of the masked output image
-    #
     log.info("   masked raster image will be created at {}.".format(masked_image_path))
     
     # gdal read raster as array
@@ -2240,17 +2477,19 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
     if geotransform_of_image != geotransform_of_mask:
         with TemporaryDirectory(dir=os.getcwd()) as td:
             temp_path_1 = os.path.join(td, "reproj_mask_temp.tif")
+            #log.info("Geotransforms do not match. Reprojecting {} to {}.".format(mask_path, temp_path_1))
             reproject_image(mask_path, temp_path_1, raster.GetProjectionRef(), do_post_resample = False)
+            #log.info("Output file exists? {}".format(str(os.path.exists(temp_path_1))))
             temp_path_2 = os.path.join(td, os.path.basename(mask_path).split(".")[0]+"_warped_clipped.tif")
-            #log.info("   Input raster      : {}".format(temp_path_1))
-            #log.info("   Extent from raster: {}".format(image_path))
-            #log.info("   Output raster     : {}".format(temp_path_2))
+            #log.info("Clipping {} to {} using extent from {}".format(temp_path_1, temp_path_2, image_path))
             clip_raster_to_intersection(temp_path_1, image_path, temp_path_2, is_landsat=False)
             mask_path = mask_path.split(".")[0]+"_warped_clipped_resampled.tif"
-            ds = gdal.Open(mask_path)
-            gdal.Translate(temp_path_2, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear') 
+            ds = gdal.Open(temp_path_2)
+            ds_out = gdal.Translate(mask_path, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear') 
             ds = None
-    mask = gdal.Open(mask_path)
+            ds_out = None
+            mask = None
+            mask = gdal.Open(mask_path)
     geotransform_of_mask = mask.GetGeoTransform()
     if geotransform_of_image != geotransform_of_mask:
         log.warning("Could not bring the mask file into exactly the same projection as the image. Check co-registration visually.")
