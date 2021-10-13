@@ -254,23 +254,39 @@ def rolling_detection(config_path,
                 cloudmask_files = [os.path.join(stacked_image_dir,f) for f in os.listdir(stacked_image_dir) \
                     if f.endswith('.msk')]
                 for cloudmask_file in cloudmask_files:
-                    log.info("  Copying {} to {}".format(cloudmask_file, os.path.join(masked_stacked_image_dir,os.path.basename(cloudmask_file).split(".")[0]+"_masked.msk")))
-                    shutil.copy(cloudmask_file, os.path.join(masked_stacked_image_dir,os.path.basename(cloudmask_file).split(".")[0]+"_masked.msk"))
+                    log.info("  Copying {} to {}".format(cloudmask_file, 
+                             os.path.join(masked_stacked_image_dir,os.path.basename(cloudmask_file).split(".")[0]+"_masked.msk")))
+                    shutil.copy(cloudmask_file, os.path.join(masked_stacked_image_dir,
+                                os.path.basename(cloudmask_file).split(".")[0]+"_masked.msk"))
 
-            log.info("Classifying image stacked with composite")
-            #TODO loop over all image files in the directory
-            masked_stacked_image_files = [os.path.join(masked_stacked_image_dir,f) \
-                for f in os.listdir(masked_stacked_image_dir) if f.endswith('.tif') or f.endswith('.tiff')]
-            for masked_stacked_image_file in masked_stacked_image_files:
-                new_class_image = os.path.join(catagorised_image_dir,
-                                               "class_{}".format(os.path.basename(masked_stacked_image_file)))
-                if build_prob_image:
-                    new_prob_image = os.path.join(probability_image_dir,
-                                                  "prob_{}".format(os.path.basename(masked_stacked_image_file)))
-                else:
-                    new_prob_image = None
-                pyeo.classification.classify_image(masked_stacked_image_file, model_path, new_class_image, new_prob_image,
-                                                   num_chunks=num_chunks, skip_existing=True, apply_mask=True)
+                log.info("Classifying masked image stacked with composite")
+                masked_stacked_image_files = [os.path.join(masked_stacked_image_dir,f) \
+                    for f in os.listdir(masked_stacked_image_dir) if f.endswith('.tif') or f.endswith('.tiff')]
+                for masked_stacked_image_file in masked_stacked_image_files:
+                    new_class_image = os.path.join(catagorised_image_dir,
+                                                   "class_{}".format(os.path.basename(masked_stacked_image_file)))
+                    if build_prob_image:
+                        new_prob_image = os.path.join(probability_image_dir,
+                                                      "prob_{}".format(os.path.basename(masked_stacked_image_file)))
+                    else:
+                        new_prob_image = None
+                    pyeo.classification.classify_image(masked_stacked_image_file, model_path, new_class_image, new_prob_image,
+                                                       num_chunks=num_chunks, skip_existing=True, apply_mask=True)
+
+            else:
+                log.info("Classifying image stacked with composite")
+                stacked_image_files = [os.path.join(stacked_image_dir,f) \
+                    for f in os.listdir(stacked_image_dir) if f.endswith('.tif') or f.endswith('.tiff')]
+                for stacked_image_file in stacked_image_files:
+                    new_class_image = os.path.join(catagorised_image_dir,
+                                                   "class_{}".format(os.path.basename(stacked_image_file)))
+                    if build_prob_image:
+                        new_prob_image = os.path.join(probability_image_dir,
+                                                      "prob_{}".format(os.path.basename(stacked_image_file)))
+                    else:
+                        new_prob_image = None
+                    pyeo.classification.classify_image(stacked_image_file, model_path, new_class_image, new_prob_image,
+                                                       num_chunks=num_chunks, skip_existing=True, apply_mask=True)
 
         # Build new composite
         if do_update or do_all:
