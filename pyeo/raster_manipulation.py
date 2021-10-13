@@ -868,16 +868,13 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             res.append(ds.GetRasterBand(band).ReadAsArray())
             ds = None
         stacked = np.dstack(res)
-        #stacked[np.where(stacked == missing_data_value)] = np.nan
         if missing_data_value is not None:
             stacked = np.ma.masked_equal(stacked, missing_data_value)
-
-        log.info("********************** stacked raster shape: {}".format(stacked.shape))
-
         median_raster = np.nanmedian(stacked, axis=-1)
-
-        log.info("********************** median raster shape: {}".format(median_raster.shape))
-
+        # catch pixels where all rasters have NaN values and set them to missing_data_value
+        all_nan_locations = np.isnan(stacked).all(axis=-1)
+        #log.info("************************{}".format(all_nan_locations.shape))
+        median_raster[all_nan_locations] = missing_data_value
         # copy metadata from first raster in the list
         in_raster = gdal.Open(in_raster_path_list[0])
         driver = gdal.GetDriverByName(format)
@@ -946,9 +943,9 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
     for band in range(4):
         tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
         tmpfiles.append(tmpfile)
+        log.info('Band {} - calculating median composite across all images using raster stacking'.format(band+1))
+        log.info('   Ignoring missing data value of {}'.format(missing_data_value))
         median_of_raster_list(masked_image_paths, tmpfile, band=band+1, missing_data_value=missing_data_value)
-        log.info('Band {} - calculating median composite across all images using raster stacking'.format(band))
-        log.info('Ignoring missing data value of {}'.format(missing_data_value))
         # log some image stats
         get_stats_from_raster_file(tmpfile)
 
