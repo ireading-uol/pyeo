@@ -69,7 +69,7 @@ In Pyeo, it takes the form of a 6-element tuple; for north-up images, these are 
     geotransform[4] = 0
     geotransform[5] = pixel_height
 
-A projection can be obtained from a raster with the following snippet:
+A geotransform can be obtained from a raster with the following snippet:
 
 .. code:: python
 
@@ -130,6 +130,10 @@ import shutil
 import subprocess
 from skimage import morphology as morph
 from tempfile import TemporaryDirectory
+import scipy.ndimage as ndimage
+import itertools as iterate
+import matplotlib.pylab as pl
+from lxml import etree
 
 from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from_polygon, write_geometry, \
     get_aoi_intersection, get_raster_bounds, align_bounds_to_whole_number, get_poly_bounding_rect, reproject_vector, \
@@ -803,9 +807,6 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
 def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, format="GTiff", generate_date_image=True,
                                       missing_data_value=0):
     """
-    DEVELOPMENT VERSION of composite_images_with_mask
-    #TODO: Test it
-
     Works down in_raster_path_list, updating pixels in composite_out_path if not masked. Will also create a mask and
     (optionally) a date image in the same directory.
 
@@ -873,7 +874,6 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
         median_raster = np.nanmedian(stacked, axis=-1)
         # catch pixels where all rasters have NaN values and set them to missing_data_value
         all_nan_locations = np.isnan(stacked).all(axis=-1)
-        #log.info("************************{}".format(all_nan_locations.shape))
         median_raster[all_nan_locations] = missing_data_value
         # copy metadata from first raster in the list
         in_raster = gdal.Open(in_raster_path_list[0])
@@ -2361,6 +2361,50 @@ def create_mask_from_confidence_layer(l2_safe_path, out_path, cloud_conf_thresho
     log.info("Mask created at {}".format(out_path))
     return out_path
 
+def create_mask_from_scl_layer(l2_safe_path, out_path, scl_class, buffer_size=0):
+    """
+    Creates a multiplicative binary mask where pixels of class scl_class are set to 0 and 
+    other pixels are 1.
+
+    Parameters
+    ----------
+    l2_safe_path : str
+        Path to the L1
+    out_path : str
+        Path to the new path
+    scl_class: int
+        Class value of the SCL scene classification layer to be set to 0 
+    buffer_size : int, optional
+        The size of the buffer to apply around the masked out pixels (dilation)
+
+    Returns
+    -------
+    out_path : str
+        The path to the mask
+
+    """
+    log = logging.getLogger(__name__)
+    log.info("Creating scene classification mask for {} with SCL class {}".format(l2_safe_path, scl_class))
+    scl_glob = "GRANULE/*/IMG_DATA/R20m/*SCL*_20m.jp2"  # This should match both old and new mask formats
+    log.warn(" SCL glob = {}".format(scl_glob))
+    scl_path = glob.glob(os.path.join(l2_safe_path, scl_glob))[0]
+    log.warn(" SCL path = {}".format(scl_path))
+    scl_image = gdal.Open(scl_path)
+    scl_array = scl_image.GetVirtualMemArray()
+    mask_array = np.isin(scl_array, (scl_class))
+
+    mask_image = create_matching_dataset(scl_image, out_path)
+    mask_image_array = mask_image.GetVirtualMemArray(eAccess=gdal.GF_Write)
+    np.copyto(mask_image_array, mask_array)
+    mask_image_array = None
+    scl_image = None
+    mask_image = None
+    resample_image_in_place(out_path, 10)
+    if buffer_size:
+        buffer_mask_in_place(out_path, buffer_size)
+    log.info("Mask created at {}".format(out_path))
+    return out_path
+
 
 def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, buffer_size=0, out_resolution=None):
     """
@@ -2404,6 +2448,55 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
     return out_path
 
 
+def raster2array(raster_file):
+    """
+    Loads the contents of a raster file into an array.
+    
+    Parameters
+    ----------
+    raster_file : str
+        Path and file name of the raster file
+    """
+    rasterArray = gdal_array.LoadFile(raster_file)
+    return rasterArray
+
+def array2raster(raster_file, new_raster_file, array):
+    """
+    Saves the contents of an array to a new raster file and copies the projection from 
+    an existing raster file.
+    
+    Parameters
+    ----------
+    raster_file : str
+        Path and file name of the raster file from which the metadata will be copied
+
+    new_raster_file : str
+        Path and file name of the newly created raster file
+
+    array : array
+        The array that will be written to new_raster_file
+    """
+    raster = gdal.Open(raster_file)
+    geotransform = raster.GetGeoTransform()
+    originX = geotransform[0]
+    originY = geotransform[3]
+    pixelWidth = geotransform[1]
+    pixelHeight = geotransform[5]
+    cols = raster.RasterXSize
+    rows = raster.RasterYSize
+    bands = raster.RasterCount
+    driver = gdal.GetDriverByName('GTiff')
+    outRaster = driver.Create(new_raster_file, cols, rows, bands, gdal.GDT_Float32)
+    outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0, pixelHeight))
+    for band in range(bands):
+        outband = outRaster.GetRasterBand(band+1)
+        outband.WriteArray(array[band])
+        outband.FlushCache()
+    outRasterSRS = osr.SpatialReference()
+    outRasterSRS.ImportFromWkt(raster.GetProjectionRef())
+    outRaster.SetProjection(outRasterSRS.ExportToWkt())
+
+
 def apply_mask_to_image(mask_path, image_path, masked_image_path):
     """
     Applies a mask of 0 and 1 values to a raster image with one or more bands in Geotiff format
@@ -2424,34 +2517,6 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
         Path and file name of the masked raster image file that will be created
 
     """
-
-    from osgeo import gdal_array
-
-    def raster2array(raster_file):
-        rasterArray = gdal_array.LoadFile(raster_file)
-        return rasterArray
-
-    def array2raster(raster_file, new_raster_file, array):
-        raster = gdal.Open(raster_file)
-        geotransform = raster.GetGeoTransform()
-        originX = geotransform[0]
-        originY = geotransform[3]
-        pixelWidth = geotransform[1]
-        pixelHeight = geotransform[5]
-        cols = raster.RasterXSize
-        rows = raster.RasterYSize
-        bands = raster.RasterCount
-        driver = gdal.GetDriverByName('GTiff')
-        outRaster = driver.Create(new_raster_file, cols, rows, bands, gdal.GDT_Float32)
-        outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0, pixelHeight))
-        for band in range(bands):
-            outband = outRaster.GetRasterBand(band+1)
-            outband.WriteArray(array[band])
-            outband.FlushCache()
-        outRasterSRS = osr.SpatialReference()
-        outRasterSRS.ImportFromWkt(raster.GetProjectionRef())
-        outRaster.SetProjection(outRasterSRS.ExportToWkt())
-    
     log = logging.getLogger(__name__)
     
     log.info("Applying mask {} to raster image {}.".format(mask_path, image_path))
@@ -2747,3 +2812,5 @@ def apply_fmask(in_safe_dir, out_file, fmask_command="fmask_sentinel2Stacked.py"
             log.info(nextline)
         if nextline == '' and fmask_proc.poll() is not None:
             break
+
+

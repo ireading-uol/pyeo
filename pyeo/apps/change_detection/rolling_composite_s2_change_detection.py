@@ -45,7 +45,7 @@ def rolling_detection(config_path,
                       arg_end_date=None,
                       build_composite=False,
                       num_chunks=None,
-                      download_source="scihub",
+                      download_source="scihub_lta",
                       flip_stacks=False,
                       download_l2_data=True,
                       build_prob_image=False,
@@ -325,7 +325,7 @@ if __name__ == "__main__":
                              "config file.")
     parser.add_argument("--chunks", dest="num_chunks", type=int, default=10, help="Sets the number of chunks to split "
                                                                                   "images to in ml processing")
-    parser.add_argument('--download_source', default="scihub", help="Sets the download source, can be scihub"
+    parser.add_argument('--download_source', default="scihub_lta", help="Sets the download source, can be scihub, scihub_lta "
                                                                     "(default) or aws")
     parser.add_argument('--flip_stacks', action='store_true', default=False,
                         help="If present, stasks the classification stack as new(bgr), old(bgr). Default is"

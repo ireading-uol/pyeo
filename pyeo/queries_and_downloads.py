@@ -36,7 +36,15 @@ USGS, for Landsat. If in doubt, use Scihub.
 
    The Copernicus Open-Access Hub is the default option for downloading sentinel-2 images. Images are downloaded in .zip
    format, and then automatically unzipped. Users are required to register with a username and password before downloading,
-   and there is a limit to no more than two concurrent downloads per username at a time. Scihub is entirely free.
+   and there is a limit to no more than two concurrent downloads per username at a time. Scihub is entirely free. 
+   Older images are moved to the long-term archive and have to be requested.
+
+- Scihub Long-Term Archive (LTA)
+
+   This option allows the submission of download requests to the Copernicus Open-Access Hub for images that are likely
+   to be retrieved from the long-term archive. Images are downloaded in .zip format, and then automatically unzipped. The
+   download request is submitted via a shell script dhus_get that tries up to 80 times with 3 minute intervals to check
+   whether the image has been successfully retrieved from the LTA.
 
 - AWS
 
@@ -719,7 +727,8 @@ def get_granule_identifiers(safe_product_id):
     return satellite, intake_date, orbit_number, granule
 
 
-def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None, try_scihub_on_fail=False):
+def download_s2_data(new_data, l1_dir, l2_dir, source='scihub_lta', user=None, passwd=None, 
+                     try_scihub_on_fail=False, dhus_get_path='/home/h/hb91/sen2cor/dhusget.sh'):
     """
     Downloads S2 imagery from AWS, google_cloud or scihub. new_data is a dict from Sentinel_2.
 
@@ -731,8 +740,8 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
         The directory to download level 1 products to.
     l2_dir : str
         The directory to download level 2 products to.
-    source : {'scihub', 'aws'}
-        The source to download the data from. Can be 'scihub' or 'aws'; see section introduction for details
+    source : {'scihub', 'scihub_lta', 'aws'}
+        The source to download the data from. Can be 'scihub', 'scihub_lta' or 'aws'; see section introduction for details
     user : str, optional
         The username for sentinelhub
     passwd : str, optional
@@ -740,6 +749,8 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
     try_scihub_on_fail : bool, optional
         If true, this function will roll back to downloading from Scihub on a failure of any other downloader. Defaults
         to `False`.
+    dhus_get_path : str, optional
+        If source is scihub_lta, then this string needs to point to the path to the dhusget.sh shell script.
 
     Raises
     ------
@@ -774,6 +785,31 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
             download_from_google_cloud([new_data[image_uuid]['identifier']], out_folder=out_path)
         elif source == "scihub":
             download_from_scihub(image_uuid, out_path, user, passwd)
+        elif source == "scihub_lta":
+            # SciHub download script for the long-term archive with 80 tries with 3 minute intervals
+            dhus_args = [
+                         dhus_get_path,
+                         "-d",
+                         "https://scihub.copernicus.eu/dhus",
+                         "-u",
+                         user,
+                         "-p",
+                         passwd,
+                         "-F",
+                         "platformname:Sentinel-2 AND identifier=" + image_uuid['identifier'] + '\'',
+            #      ' -S 2021-01-01T00:00:00.000Z -E 2021-02-12T00:00:00.000Z ' + 
+                         "-o",
+                         "product",
+                         "-w",
+                         5,
+                         "-W", 
+                         80,
+                         "-O",
+                         out_path
+                        ]
+            log.warn("running cmd with args: {}".format(dhus_args))
+            dhus_get_proc = subprocess.Popen(dhus_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            subprocess.run(cmd)
         else:
             log.error("Invalid data source; valid values are 'aws', 'google' and 'scihub'")
             raise BadDataSourceExpection
