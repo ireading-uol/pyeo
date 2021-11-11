@@ -1102,11 +1102,12 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", gen
                           if image_name.endswith(".tif")]
 
     sorted_image_paths = [f for f in sorted_image_paths if "_masked" not in f] #remove already masked tiff files to avoid double-processing
+    log.info("Sorted image paths: {}".format(sorted_image_paths))
 
     # get timestamp of most recent image in the directory
     for i in range(len(sorted_image_paths)):
         timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[i]))
-        #log.info("Image number {} has time stamp {}".format(i+1, timestamp))
+        log.info("Image number {} has time stamp {}".format(i+1, timestamp))
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
     composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
     clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
@@ -2092,13 +2093,11 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
     Parameters
     ----------
     image_path : str
-        Path to the L1 Sentinel 2 .SAFE file
+        Path to the L1C Sentinel 2 .SAFE file directory
     sen2cor_path : str
         Path to the l2a_process script (Linux) or l2a_process.exe (Windows)
     delete_unprocessed_image : bool, optional
         If True, delete the unprocessed image after processing is done. Defaults to False.
-    gipp_path : str, optional
-        Path to the GIPP file. Uses L2A_GIPP.xml
 
     Returns
     -------
@@ -2116,11 +2115,13 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
     log.info("calling sen2cor subprocess command:")
     log.info(sen2cor_path + " " + image_path + " --output_dir " + os.path.dirname(image_path))
     #log.info(sen2cor_path + " " + image_path + " --output_dir " + os.path.dirname(image_path) + " --GIP_L2A " + gipp_path)
-    now_time = datetime.datetime.now()   # I can't think of a better way of geting the new outpath from sen2cor
+    now_time = datetime.datetime.now()   # I can't think of a better way of getting the new outpath from sen2cor
     timestamp = now_time.strftime(r"%Y%m%dT%H%M%S")
+    version = get_sen2cor_version(sen2cor_path)
+    out_path = build_sen2cor_output_path(image_path, timestamp, version)
     # The application of sen2cor below with the option --GIP_L2A caused an unspecified metadata error in the xml file.
     # Removing it resolves this problem.
-    sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', os.path.dirname(image_path)],
+    sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', out_path],
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     universal_newlines=True)
     #sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', os.path.dirname(image_path),
@@ -2139,9 +2140,7 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
             raise subprocess.CalledProcessError(-1, "L2A_Process")
 
     log.info("sen2cor processing finished for {}".format(image_path))
-    log.info("Validating:")
-    version = get_sen2cor_version(sen2cor_path)
-    out_path = build_sen2cor_output_path(image_path, timestamp, version)
+    log.info("Checking for presence of band raster files.")
     if not check_for_invalid_l2_data(out_path):
         log.error("10m imagery not present in {}".format(out_path))
         raise BadS2Exception
@@ -2218,14 +2217,14 @@ def get_sen2cor_version(sen2cor_path):
 
 def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unprocessed_image=False):
     """
-    Applies Sen2cor atmospheric correction to each L1 image in in_directory
+    Applies Sen2cor atmospheric correction to each L1C image in in_directory
 
     Parameters
     ----------
     in_directory : str
-        Path to the directory containing the L1 images
+        Path to the directory containing the L1C images
     out_directory : str
-        Path to the directory that will containg the new L2 images
+        Path to the directory that will containg the new L2A images
     sen2cor_path : str
         Path to the l2a_process script (Linux) or l2a_process.exe (Windows)
     delete_unprocessed_image : bool, optional
@@ -2239,6 +2238,8 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
     for image in images:
         log.info("Atmospheric correction of {}".format(image))
         image_path = os.path.join(in_directory, image)
+        # update the product discriminator part of the output file name
+        # see https://sentinels.copernicus.eu/web/sentinel/user-guides/sentinel-2-msi/naming-convention
         image_timestamp = datetime.datetime.now().strftime(r"%Y%m%dT%H%M%S")
         log.info("   sen2cor path = " + sen2cor_path)
         out_name = build_sen2cor_output_path(image, image_timestamp, get_sen2cor_version(sen2cor_path))
@@ -2248,7 +2249,7 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
         out_glob = out_path.rpartition("_")[0] + "*"
         log.info("   sen2cor path = " + sen2cor_path)
         log.info("   image path = " + image_path)
-        log.info("   image time stamp = " + image_timestamp)
+        log.info("   sen2cor processing time stamp = " + image_timestamp)
         if glob.glob(out_glob):
             log.warning("{} exists. Skipping.".format(out_path))
             continue
@@ -2259,8 +2260,8 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
             pass
         else:
             l2_name = os.path.basename(l2_path)
-            log.info("L2  path: {}".format(l2_path))
-            log.info("New path: {}".format(os.path.join(out_directory, l2_name)))
+            log.info("Changing L2A path: {}".format(l2_path))
+            log.info("to new L2A   path: {}".format(os.path.join(out_directory, l2_name)))
             os.rename(l2_path, os.path.join(out_directory, l2_name))
 
 

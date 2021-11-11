@@ -119,7 +119,6 @@ def validate_config_file(config_path):
     pass
 
 
-# What was I thinking with these two functions?
 def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     """
     Checks the existence of the specified resolution of imagery. Returns a True-value with a warning if passed

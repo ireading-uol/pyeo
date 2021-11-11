@@ -45,7 +45,7 @@ def rolling_detection(config_path,
                       arg_end_date=None,
                       build_composite=False,
                       num_chunks=None,
-                      download_source="scihub_lta",
+                      download_source="scihub",
                       flip_stacks=False,
                       download_l2_data=True,
                       build_prob_image=False,
@@ -133,11 +133,15 @@ def rolling_detection(config_path,
                                                                                           composite_end_date,
                                                                                           conf, cloud_cover=cloud_cover)
                 if download_l2_data:
-                    log.info("Filtering query results for matching L1C and L2A products")
+                    log.info("Restricting query results to include only matching L1C and L2A products.")
                     composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
-                    log.info("{} products remain".format(len(composite_products)))
+                    log.info("{} matching products with both L1C and L2A remain.".format(len(composite_products)))
+                    log.info("Downloading matching Sentinel-2 L1C and L2A products.")
+                    pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir, 
+                                                                composite_l2_image_dir, download_source,
+                                                                user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
                 else:
-                    log.info("Filtering query results to L1C only")
+                    log.info("Restricting query results to L1C products only.")
                     composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
                     pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir,
                                                                 composite_l2_image_dir,
@@ -147,10 +151,6 @@ def rolling_detection(config_path,
                     pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, composite_l2_image_dir,
                                                                     sen2cor_path,
                                                                     delete_unprocessed_image=False)
-                log.info("Downloading Sentinel-2 data")
-                pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir, 
-                                                            composite_l2_image_dir, download_source,
-                                                            user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
 
             log.info("Merging raster bands into single files for each image")
             pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, composite_merged_dir,
@@ -164,21 +164,21 @@ def rolling_detection(config_path,
             products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path, start_date, end_date, conf,
                                                                             cloud_cover=cloud_cover)
             if download_l2_data:
-                log.info("Filtering query results for matching L1C and L2A products")
+                log.info("Restricting query results to include only matching L1C and L2A products.")
                 products = pyeo.queries_and_downloads.filter_non_matching_s2_data(products)
                 log.info("{} products remain".format(len(products)))
+                log.info("Downloading selected products.")
+                pyeo.queries_and_downloads.download_s2_data(products, l1_image_dir, l2_image_dir, download_source,
+                                                            user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
             else:
-                log.info("Filtering query results to L1C only")
+                log.info("Restricting query results to L1C products only.")
                 products = pyeo.queries_and_downloads.filter_to_l1_data(products)
-            log.info("Downloading")
-            pyeo.queries_and_downloads.download_s2_data(products, l1_image_dir, l2_image_dir, download_source,
-                                                        user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
-
-        # Atmospheric correction
-        if do_preprocess or do_all and not download_l2_data:
-            log.info("Applying sen2cor")
-            pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, l2_image_dir, sen2cor_path,
-                                                            delete_unprocessed_image=False)
+                log.info("Downloading selected products.")
+                pyeo.queries_and_downloads.download_s2_data(products, l1_image_dir, l2_image_dir, download_source,
+                                                            user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
+                log.info("Applying sen2cor to downloaded L1C products.")
+                pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, l2_image_dir, sen2cor_path,
+                                                                delete_unprocessed_image=False)
 
         # Aggregating single band raster files into a single Geotiff file
         if do_merge or do_all:
@@ -325,27 +325,28 @@ if __name__ == "__main__":
                              "config file.")
     parser.add_argument("--chunks", dest="num_chunks", type=int, default=10, help="Sets the number of chunks to split "
                                                                                   "images to in ml processing")
-    parser.add_argument('--download_source', default="scihub_lta", help="Sets the download source, can be scihub, scihub_lta "
+    parser.add_argument('--download_source', default="scihub", help="Sets the download source, can be scihub "
                                                                     "(default) or aws")
     parser.add_argument('--flip_stacks', action='store_true', default=False,
                         help="If present, stasks the classification stack as new(bgr), old(bgr). Default is"
                              "old(bgr), new(bgr). For compatability with old models.")
     parser.add_argument('--download_l2_data', action='store_true', default=False,
-                        help="If present, skips sen2cor and instead downloads every image in the query with"
-                             "both a L1 and L2 product")
+                        help="If present, skips sen2cor and instead downloads every image in the query for which"
+                             "both an L1C and L2A product are available")
     parser.add_argument('--build_prob_image', action='store_true', default=False,
                         help="If present, build a confidence map of pixels. These tend to be large.")
-
     parser.add_argument('-d', '--download', dest='do_download', action='store_true', default=False,
                         help='If present, perform the query and download level 1 images.')
     parser.add_argument('-p', '--preprocess', dest='do_preprocess', action='store_true',  default=False,
-                        help='If present, apply sen2cor to all .SAFE in images/L1. Stores the result in images/L2')
+                        help='Currently does nothing, because atmospheric correction is applied automatically after '
+                        'download of L1C products.')
+    #                   'If present, apply sen2cor to all .SAFE in images/L1. Stores the result in images/L2')
     parser.add_argument('-m', '--merge', dest='do_merge', action='store_true', default=False,
                         help='If present, merges the blue, green, red and NIR 10m rasters in each L2 safefile'
                              ' into a single 4-band raster. This will also mask and reproject'
                              ' the image to the requested projection. Stores the result in images/merged.')
     parser.add_argument('-a', '--mask', dest='do_mask', action='store_true', default=False,
-                        help="Masks are created by default - this presently does nothing.")
+                        help="Applies an external mask file.")
     parser.add_argument('-s', '--stack', dest='do_stack', action='store_true', default=False,
                         help="For each image in images/merged, stacks with the composite in composite/ that is most "
                              "recent prior to the image. Stores an 8-band geotiff in images/stacked, where bands 1-4 "

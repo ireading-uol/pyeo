@@ -39,13 +39,6 @@ USGS, for Landsat. If in doubt, use Scihub.
    and there is a limit to no more than two concurrent downloads per username at a time. Scihub is entirely free. 
    Older images are moved to the long-term archive and have to be requested.
 
-- Scihub Long-Term Archive (LTA)
-
-   This option allows the submission of download requests to the Copernicus Open-Access Hub for images that are likely
-   to be retrieved from the long-term archive. Images are downloaded in .zip format, and then automatically unzipped. The
-   download request is submitted via a shell script dhus_get that tries up to 80 times with 3 minute intervals to check
-   whether the image has been successfully retrieved from the LTA.
-
 - AWS
 
    Sentinel data is also publicly hosted on Amazon Web Services. This storage is provided by Sinergise, and is normally
@@ -72,6 +65,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import tarfile
 import zipfile
 from multiprocessing.dummy import Pool
@@ -533,7 +527,7 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
             n = len(result)
             print(type(result))
             rolling_n = rolling_n + n
-            log.info("This query returned {} new images that have been added to the total of {}".format(len(result), len(rolling_result)))
+            log.info("This query returned {} new images. The overall list now has {} images.".format(len(result), len(rolling_result)))
         if n ==100:
             log.info("Submitting new query starting from image number {}".format(rolling_n))
     return rolling_result
@@ -595,16 +589,19 @@ def filter_non_matching_s2_data(query_output):
 
     """
     # Here be algorithms
-    # A L1 and L2 image are related if and only if the following fields match:
+    # A L1C and L2A image are related if and only if the following fields match:
     #    Satellite (S2[A|B])
     #    Intake date (FIRST timestamp)
     #    Orbit number (Rxxx)
     #    Granule ID (Txxaaa)
-    # So if we succeviely partition the query, we should get a set of products with either 1 or
+    # So if we succesively partition the query, we should get a set of products with either 1 or
     # 2 entries per granule / timestamp combination
     sorted_query = sorted(query_output.values(), key=get_query_granule)
     granule_groups = {str(key): list(group) for key, group in itertools.groupby(sorted_query, key=get_query_granule)}
     granule_date_groups = {}
+    #TODO: generate log info
+    #filenames = [f for key, f in itertools.groupby(sorted_query, key=get_query_filename)]
+    #log.info("Sorted input query results: {}".format(filenames))
 
     # Partition as above.
     # We can probably expand this to arbitrary lengths of queries. If you catch me doing this, please restrain me.
@@ -626,8 +623,11 @@ def filter_non_matching_s2_data(query_output):
     # Finally, check that there is actually something here.
     if len(out_set) == 0:
         log.error(
-            "No L2 data detected for query. Please remove the --download_l2_data flag or request more recent images.")
-        raise NoL2DataAvailableException
+            "No L2A data detected for query. Please remove the --download_l2_data flag or request more recent images.")
+       # raise NoL2DataAvailableException
+    #TODO: generate log info
+    #filenames = [f for key, f in itertools.groupby(out_set, key=get_query_filename)]
+    #log.info("Sorted output query results: {}".format(filenames))
     return out_set
 
 
@@ -664,6 +664,24 @@ def get_query_granule(query_item):
 
     """
     return query_item["title"].split("_")[5]
+
+
+def get_query_filename(query_item):
+    """
+    Gets the filename element of a query
+
+    Parameters
+    ----------
+    query_item : dict
+        An item from a query results dictionary.
+
+    Returns
+    -------
+    filename : str
+        The filename element of that item.
+
+    """
+    return query_item["filename"]
 
 
 def get_query_processing_time(query_item):
@@ -727,8 +745,8 @@ def get_granule_identifiers(safe_product_id):
     return satellite, intake_date, orbit_number, granule
 
 
-def download_s2_data(new_data, l1_dir, l2_dir, source='scihub_lta', user=None, passwd=None, 
-                     try_scihub_on_fail=False, dhus_get_path='/home/h/hb91/sen2cor/dhusget.sh'):
+def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None, 
+                     try_scihub_on_fail=False):
     """
     Downloads S2 imagery from AWS, google_cloud or scihub. new_data is a dict from Sentinel_2.
 
@@ -740,8 +758,8 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub_lta', user=None, p
         The directory to download level 1 products to.
     l2_dir : str
         The directory to download level 2 products to.
-    source : {'scihub', 'scihub_lta', 'aws'}
-        The source to download the data from. Can be 'scihub', 'scihub_lta' or 'aws'; see section introduction for details
+    source : {'scihub', 'aws'}
+        The source to download the data from. Can be 'scihub' or 'aws'; see section introduction for details
     user : str, optional
         The username for sentinelhub
     passwd : str, optional
@@ -749,8 +767,6 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub_lta', user=None, p
     try_scihub_on_fail : bool, optional
         If true, this function will roll back to downloading from Scihub on a failure of any other downloader. Defaults
         to `False`.
-    dhus_get_path : str, optional
-        If source is scihub_lta, then this string needs to point to the path to the dhusget.sh shell script.
 
     Raises
     ------
@@ -781,12 +797,22 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub_lta', user=None, p
                                                 uuid=image_uuid, user=user, passwd=passwd)
             else:
                 download_safe_format(product_id=new_data[image_uuid]['identifier'], folder=out_path)
-        elif source == 'google':
-            download_from_google_cloud([new_data[image_uuid]['identifier']], out_folder=out_path)
-        elif source == "scihub":
+        #elif source == 'google':
+        #    download_from_google_cloud([new_data[image_uuid]['identifier']], out_folder=out_path)
+        elif source == 'scihub':
             download_from_scihub(image_uuid, out_path, user, passwd)
-        elif source == "scihub_lta":
+        else:
+            log.error("Invalid data source; valid values are 'aws' and 'scihub'")
+            raise BadDataSourceExpection
+        '''
+        elif source == 'scihub_lta':
             # SciHub download script for the long-term archive with 80 tries with 3 minute intervals
+            cmd = dhus_get_path + ' -d https://scihub.copernicus.eu/dhus -u ' + user + ' -p ' + passwd + \
+                  ' -F \'identifier:' + str(image_uuid) + '\' ' + \
+                  '-o product -N 5 -w 5 -W 80 -O ' + out_path
+            log.info('Running cmd: {}'.format(cmd))
+            os.system(cmd)
+
             dhus_args = [
                          dhus_get_path,
                          "-d",
@@ -796,23 +822,25 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub_lta', user=None, p
                          "-p",
                          passwd,
                          "-F",
-                         "platformname:Sentinel-2 AND identifier=" + image_uuid['identifier'] + '\'',
-            #      ' -S 2021-01-01T00:00:00.000Z -E 2021-02-12T00:00:00.000Z ' + 
+                         "\'identifier:" + str(image_uuid) + "\'",
                          "-o",
                          "product",
+                         "-N",
+                         "5",
                          "-w",
-                         5,
+                         "5",
                          "-W", 
-                         80,
+                         "80",
                          "-O",
                          out_path
                         ]
             log.warn("running cmd with args: {}".format(dhus_args))
-            dhus_get_proc = subprocess.Popen(dhus_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            subprocess.run(cmd)
-        else:
-            log.error("Invalid data source; valid values are 'aws', 'google' and 'scihub'")
-            raise BadDataSourceExpection
+            dhus_get_proc = subprocess.Popen(dhus_args, stdout=subprocess.PIPE)
+            for line in dhus_get_proc.stdout:
+                log.warn("dhusget.sh: >{}".format(line))
+            dhus_get_proc.wait()
+            log.warn("return code = {}".format(dhus_get_proc.returncode))
+        '''
 
 
 def download_s2_pairs(l1_dir, l2_dir, conf):
@@ -934,18 +962,46 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     -----
     If interrupted mid-download, there will be a .incomplete file in the download folder. You might need to remove
     this for further processing.
+    Copernicus Open Access Hub no longer stores all products online for immediate retrieval. 
+    Offline products can be requested from the Long Term Archive (LTA) and should become 
+    available within 24 hours. Copernicus Open Access Hub’s quota currently permits users 
+    to request an offline product every 30 minutes.
+    A product’s availability can be checked with a regular OData query by evaluating the 
+    Online property value or by using the is_online() convenience method.
+    When trying to download an offline product with download() it will trigger its retrieval 
+    from the LTA.
+    Given a list of offline and online products, download_all() will download online products, 
+    while concurrently triggering the retrieval of offline products from the LTA. 
+    Offline products that become online while downloading will be added to the download queue. 
+    download_all() terminates when the download queue is empty, even if not all products were 
+    retrieved from the LTA. We suggest repeatedly calling download_all() to download all products, 
+    either manually or using a third-party library, e.g. tenacity.
+
+    Source: https://sentinelsat.readthedocs.io/en/latest/api_overview.html
 
     """
     api = SentinelAPI(user, passwd, timeout=600)
     api.api_url = "https://apihub.copernicus.eu/apihub/"
     log.info("Downloading {} from scihub".format(product_uuid))
-    #TODO: update this line with long-term-archive parameters that have been added to the Copernicus Hub API
-    prod = api.download(product_uuid, out_folder)
-    if not prod:
-        log.error("{} not found. Please check.".format(product_uuid))
-    if not prod["Online"]:
-        log.info("{} is being retrieved from long-term archive. Please try again later.".format(product_uuid))
-        return 1
+    is_online = api.is_online(product_uuid)
+    if is_online:
+        log.info('Product {} is online. Starting download.'.format(product_uuid))
+        prod = api.download(product_uuid, out_folder)
+        if not prod:
+            log.error("Product {} not found. Please check manually on the Copernicus Open Data Hub.".format(product_uuid))
+            return 1
+    else:
+        #TODO: fix error in Sentinelsat at this point
+        log.warn("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
+        log.warn("\'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")
+        @tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_fixed(1801))
+        def download_all(*args, **kwargs):
+            return api.download_all(*args, **kwargs)
+        prod, triggered, failed = download_all([product_uuid], out_folder, max_attempts=10, checksum=True,
+                                                     n_concurrent_dl=2, lta_retry_delay=600)
+        log.info("Downloaded: {}".format(prod))
+        log.info("Triggered: {}".format(triggered))
+        log.info("Failed: {}".format(failed))
     zip_path = os.path.join(out_folder, prod['title'] + ".zip")
     log.info("Unzipping {} to {}".format(zip_path, out_folder))
     zip_ref = zipfile.ZipFile(zip_path, 'r')
