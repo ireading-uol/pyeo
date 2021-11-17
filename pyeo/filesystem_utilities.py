@@ -144,8 +144,10 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     granule_path = r"GRANULE/*/IMG_DATA/R{}/*_B0[8,4,3,2]*.jp2".format(resolution)
     image_glob = os.path.join(l2_SAFE_file, granule_path)
     if len(glob.glob(image_glob)) == 4:
+        log.info("All necessary bands are complete")
         return 1
     else:
+        log.warning("Not all necessary bands have been found in the SAFE directory")
         return 0
 
 
@@ -171,8 +173,10 @@ def check_for_invalid_l1_data(l1_SAFE_file):
     granule_path = r"GRANULE/*/IMG_DATA/*_B0[8,4,3,2]*.jp2"
     image_glob = os.path.join(l1_SAFE_file, granule_path)
     if len(glob.glob(image_glob)) == 4:
+        log.info("All necessary bands are complete")
         return 1
     else:
+        log.warning("Not all necessary bands have been found in the SAFE directory")
         return 0
 
 

@@ -135,6 +135,34 @@ def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, st
     return _rest_out_to_json(results)
 
 
+def _tile_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0):
+    session = requests.Session()
+    session.auth = (user, passwd)
+    rest_url = "https://apihub.copernicus.eu/apihub/search"
+
+    search_params = {
+        "platformname": "((Sentinel-2))",
+        "tileid": tile_id,
+        "beginposition": "[{} TO {}]".format(start_date, end_date),
+        "endposition": "[{} TO {}]".format(start_date, end_date),
+        "cloudcoverpercentage": "[0 TO {}]".format(cloud)
+    }
+    search_string = " AND ".join([f"{term}:{query}" for term, query in search_params.items()])
+
+    request_params = {
+        "q"    : search_string,
+        "rows" : 100,
+        "start": start_row,
+    }
+
+    results = session.get(rest_url, timeout=600, params=request_params)
+    if results.status_code >= 400:
+        print("Bad request: code {}".format(results.status_code))
+        print(results.content)
+        raise requests.exceptions.RequestException
+    return _rest_out_to_json(results)
+
+
 def _rest_out_to_json(result):
     root = ElementTree.fromstring(result.content.replace(b"\n", b""))
     total_results = int(root.find("{http://a9.com/-/spec/opensearch/1.1/}totalResults").text)
@@ -190,7 +218,7 @@ def _is_4326(geom):
         return False
 
 
-def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, query_func=_rest_query, start_row=0):
+def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile_id='None', start_row=0):
     """
     Fetches a list of Sentinel-2 products
 
@@ -198,30 +226,33 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, quer
     -----------
 
     user : string
-           Username for ESA hub. Register at https://scihub.copernicus.eu/dhus/#/home
+        Username for ESA hub. Register at https://scihub.copernicus.eu/dhus/#/home
 
     passwd : string
-             password for the ESA Open Access hub
+        password for the ESA Open Access hub
 
     geojsonfile : string
-                  Path to a geometry file containing a polygon of the outline of the area you wish to download.
-                  Can be a geojson (.json/.geojson) or a shapefile (.shp)
-                  See www.geojson.io for a tool to build these.
+        Path to a geojson file containing a polygon of the outline of the area you wish to download.
+        See www.geojson.io for a tool to build these.
+        If no geojson file is provided, a tile_id is required. In that case, aoi_path should point
+        to the root directory for the processing run in which all subdirectories will be created.
 
     start_date : string
-                 Date of beginning of search in the format YYYY-MM-DDThh:mm:ssZ (ISO standard)
+        Date of beginning of search in the format YYYY-MM-DDThh:mm:ssZ (ISO standard)
 
     end_date : string
-               Date of end of search in the format yyyy-mm-ddThh:mm:ssZ
-               See https://www.w3.org/TR/NOTE-datetime, or use check_for_s2_data_by_date
+        Date of end of search in the format yyyy-mm-ddThh:mm:ssZ
+        See https://www.w3.org/TR/NOTE-datetime, or use check_for_s2_data_by_date
 
     cloud : int, optional
-            The maximum cloud clover percentage (as calculated by Copernicus) to download. Defaults to 100%
+        The maximum cloud clover percentage (as calculated by Copernicus) to download. Defaults to 100%
 
-    query_func : function
-                A function that takes the following args: user, passwd, footprint_wkt, start_date, end_date, cloud
+    tile_id : str
+        Sentinel-2 granule ID - only required in no geojson file is given and tile-based processing
+        is selected. Default: 'None' - do the search by geojson extent.
 
-    start_row : integer of the start row of the query results, can be 0,100,200,... if more than 100 results are returned
+    start_row : int
+        integer of the start row of the query results, can be 0,100,200,... if more than 100 results are returned
 
     Returns
     -------
@@ -236,26 +267,34 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, quer
 
     """
     with TemporaryDirectory() as td:
-        # Preprocessing geometry
-        geom = ogr.Open(geojsonfile)
-        if not _is_4326(geom):
-            reproj_geom_path = os.path.join(td, "temp.shp")
-            reproject_vector(geojsonfile, os.path.join(td, "temp.shp"), 4326)
-            geojsonfile = reproj_geom_path
-        if geojsonfile.endswith("json"):
-            footprint = geojson_to_wkt(read_geojson(geojsonfile))
-        elif geojsonfile.endswith("shp"):
-            footprint = shapefile_to_wkt(geojsonfile)
-        else:
-            raise InvalidGeometryFormatException("Please provide a .json, .geojson or a .shp as geometry.")
-
         # Preprocessing dates
         start_date = _date_to_timestamp(start_date)
         end_date = _date_to_timestamp(end_date)
 
-        log.info("Sending Sentinel-2 query:\nfootprint: {}\nstart_date: {}\nend_date: {}\n cloud_cover: {} ".format(
-            footprint, start_date, end_date, cloud))
-        return query_func(user, passwd, footprint, start_date, end_date, cloud, start_row)
+        log.warning("tile_id = {}".format(tile_id))
+        if tile_id == 'None':
+            log.warning("tile_id == None")
+            # Preprocessing geometry
+            geom = ogr.Open(geojsonfile)
+            if not _is_4326(geom):
+                reproj_geom_path = os.path.join(td, "temp.shp")
+                reproject_vector(geojsonfile, os.path.join(td, "temp.shp"), 4326)
+                geojsonfile = reproj_geom_path
+            if geojsonfile.endswith("json"):
+                footprint = geojson_to_wkt(read_geojson(geojsonfile))
+            elif geojsonfile.endswith("shp"):
+                footprint = shapefile_to_wkt(geojsonfile)
+            else:
+                raise InvalidGeometryFormatException("Please provide a .json, .geojson or a .shp as geometry.")
+            log.info("Sending Sentinel-2 query:\nfootprint: {}\nstart_date: {}\nend_date: {}\n cloud_cover: {} ".format(
+                footprint, start_date, end_date, cloud))
+            return _rest_query(user, passwd, footprint, start_date, end_date, cloud, start_row)
+        else:
+            log.warning("tile_id != None")
+            #todo: TEST THIS BIT
+            log.info("Sending Sentinel-2 query:\ntile_id: {}\nstart_date: {}\nend_date: {}\n cloud_cover: {} ".format(
+                tile_id, start_date, end_date, cloud))
+            return _tile_query(user, passwd, tile_id, start_date, end_date, cloud, start_row)
 
 
 def _date_to_timestamp(date):
@@ -473,7 +512,7 @@ def get_landsat_api_key(conf, session):
     return session_key
 
 
-def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100):
+def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None'):
     """
     Gets all the products between start_date and end_date. Wraps sent2_query to avoid having passwords and
     long-format timestamps in code.
@@ -483,6 +522,8 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     aoi_path : str
         Path to a geojson file containing a polygon of the outline of the area you wish to download.
         See www.geojson.io for a tool to build these.
+        If no geojson file is provided, a tile_id is required. In that case, aoi_path should point
+        to the root directory for the processing run in which all subdirectories will be created.
 
     start_date : str
         Start date in the format yyyymmdd.
@@ -499,7 +540,11 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
             conf={'sent_2':{'user':'your_username', 'pass':'your_pass'}}
 
     cloud_cover : int
-        The maximum level of cloud cover in images to be downloaded.
+        The maximum level of cloud cover in images to be downloaded. Default: 100 (all images returned)
+
+    tile_id : str
+        Sentinel-2 granule ID - only required in no geojson file is given and tile-based processing
+        is selected. Default: 'None' - no tile-based search but aoi-based search
 
     Returns
     -------
@@ -507,7 +552,10 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         A dictionary of Sentinel 2 products.
 
     """
-    log.info("Querying for imagery between {} and {} for aoi {}".format(start_date, end_date, aoi_path))
+    if tile_id == 'None':
+        log.info("Querying for imagery between {} and {} for aoi {}".format(start_date, end_date, aoi_path))
+    else:
+        log.info("Querying for imagery between {} and {} for tile ID {}".format(start_date, end_date, tile_id))
     user = conf['sent_2']['user']
     password = conf['sent_2']['pass']
     start_timestamp = dt.datetime.strptime(start_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
@@ -516,8 +564,8 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     rolling_n = 0 # rolling number of search results
     n = 100 # number of individual search results of each query
     while n == 100:
-        result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover,
-                             start_row=int(rolling_n/100))
+        result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover, tile_id=tile_id, 
+                             start_row=rolling_n)
         try:
             rolling_result
         except NameError:
@@ -525,7 +573,6 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         else:
             rolling_result =  {**rolling_result, **result} # concatenate the new results with the previous dataframe
             n = len(result)
-            print(type(result))
             rolling_n = rolling_n + n
             log.info("This query returned {} new images. The overall list now has {} images.".format(len(result), len(rolling_result)))
         if n ==100:
@@ -779,12 +826,12 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
         if 'L1C' in identifier:
             out_path = os.path.join(l1_dir, identifier + ".SAFE")
             if check_for_invalid_l1_data(out_path) == 1:
-                log.info("L1 imagery exists, skipping download")
+                log.info("L1C imagery exists, skipping download")
                 continue
         elif 'L2A' in identifier:
             out_path = os.path.join(l2_dir, identifier + ".SAFE")
             if check_for_invalid_l2_data(out_path) == 1:
-                log.info("L2 imagery exists, skipping download")
+                log.info("L2A imagery exists, skipping download")
                 continue
         else:
             log.error("{} is not a Sentinel 2 product".format(identifier))
@@ -834,12 +881,12 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
                          "-O",
                          out_path
                         ]
-            log.warn("running cmd with args: {}".format(dhus_args))
+            log.warning("running cmd with args: {}".format(dhus_args))
             dhus_get_proc = subprocess.Popen(dhus_args, stdout=subprocess.PIPE)
             for line in dhus_get_proc.stdout:
-                log.warn("dhusget.sh: >{}".format(line))
+                log.warning("dhusget.sh: >{}".format(line))
             dhus_get_proc.wait()
-            log.warn("return code = {}".format(dhus_get_proc.returncode))
+            log.warning("return code = {}".format(dhus_get_proc.returncode))
         '''
 
 
@@ -982,7 +1029,7 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     """
     api = SentinelAPI(user, passwd, timeout=600)
     api.api_url = "https://apihub.copernicus.eu/apihub/"
-    log.info("Downloading {} from scihub".format(product_uuid))
+    #log.info("Downloading {} from scihub".format(product_uuid))
     is_online = api.is_online(product_uuid)
     if is_online:
         log.info('Product {} is online. Starting download.'.format(product_uuid))
@@ -992,13 +1039,14 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
             return 1
     else:
         #TODO: fix error in Sentinelsat at this point
-        log.warn("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
-        log.warn("\'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")
-        @tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_fixed(1801))
+        log.warning("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
+        log.warning("Remember: \'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")
+        @tenacity.retry(stop=tenacity.stop_after_attempt(5), wait=tenacity.wait_fixed(601))
         def download_all(*args, **kwargs):
             return api.download_all(*args, **kwargs)
-        prod, triggered, failed = download_all([product_uuid], out_folder, max_attempts=10, checksum=True,
+        downloaded, triggered, failed = api.download_all([product_uuid], out_folder, max_attempts=10, checksum=True,
                                                      n_concurrent_dl=2, lta_retry_delay=600)
+        prod = downloaded[product_uuid]
         log.info("Downloaded: {}".format(prod))
         log.info("Triggered: {}".format(triggered))
         log.info("Failed: {}".format(failed))

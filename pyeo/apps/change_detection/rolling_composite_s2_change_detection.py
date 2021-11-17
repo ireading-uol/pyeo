@@ -71,6 +71,7 @@ def rolling_detection(config_path,
     sen_user = conf['sent_2']['user']
     sen_pass = conf['sent_2']['pass']
     project_root = conf['forest_sentinel']['root_dir']
+    tile_id = conf['forest_sentinel']['tile_id']
     aoi_path = conf['forest_sentinel']['aoi_path']
     start_date = conf['forest_sentinel']['start_date']
     end_date = conf['forest_sentinel']['end_date']
@@ -131,60 +132,94 @@ def rolling_detection(config_path,
                 composite_products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
                                                                                           composite_start_date,
                                                                                           composite_end_date,
-                                                                                          conf, cloud_cover=cloud_cover)
+                                                                                          conf, 
+                                                                                          cloud_cover=cloud_cover,
+                                                                                          tile_id=tile_id)
                 if download_l2_data:
                     log.info("Restricting query results to include only matching L1C and L2A products.")
                     composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
                     log.info("{} matching products with both L1C and L2A remain.".format(len(composite_products)))
                     log.info("Downloading matching Sentinel-2 L1C and L2A products.")
-                    pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir, 
-                                                                composite_l2_image_dir, download_source,
-                                                                user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
+                    pyeo.queries_and_downloads.download_s2_data(composite_products, 
+                                                                composite_l1_image_dir, 
+                                                                composite_l2_image_dir, 
+                                                                download_source,
+                                                                user=sen_user, 
+                                                                passwd=sen_pass, 
+                                                                try_scihub_on_fail=True)
                 else:
                     log.info("Restricting query results to L1C products only.")
                     composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
-                    pyeo.queries_and_downloads.download_s2_data(composite_products, composite_l1_image_dir,
+                    pyeo.queries_and_downloads.download_s2_data(composite_products, 
+                                                                composite_l1_image_dir,
                                                                 composite_l2_image_dir,
-                                                                source=download_source, user=sen_user, passwd=sen_pass,
+                                                                source=download_source, 
+                                                                user=sen_user, 
+                                                                passwd=sen_pass,
                                                                 try_scihub_on_fail=True)
                     log.info("Atmospheric correction with sen2cor for L1C products")
-                    pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, composite_l2_image_dir,
+                    pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, 
+                                                                    composite_l2_image_dir,
                                                                     sen2cor_path,
                                                                     delete_unprocessed_image=False)
 
             log.info("Merging raster bands into single files for each image")
-            pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, composite_merged_dir,
+            pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, 
+                                                            composite_merged_dir,
                                                             composite_l1_image_dir,
-                                                            cloud_certainty_threshold, epsg=epsg, buffer_size=10)
+                                                            cloud_certainty_threshold, 
+                                                            epsg=epsg, 
+                                                            buffer_size=10)
             log.info("Building initial cloud-free composite from directory {}".format(composite_dir))
-            pyeo.raster_manipulation.clever_composite_directory(composite_merged_dir, composite_dir, generate_date_images=True)
+            pyeo.raster_manipulation.clever_composite_directory(composite_merged_dir, 
+                                                                composite_dir, 
+                                                                generate_date_images=True)
 
         # Query and download all images since last composite
         if do_download or download_l2_data or do_all:
-            products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path, start_date, end_date, conf,
-                                                                            cloud_cover=cloud_cover)
+            products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
+                                                                            start_date, 
+                                                                            end_date, 
+                                                                            conf,
+                                                                            cloud_cover=cloud_cover,
+                                                                            tile_id=tile_id) 
             if download_l2_data:
                 log.info("Restricting query results to include only matching L1C and L2A products.")
                 products = pyeo.queries_and_downloads.filter_non_matching_s2_data(products)
                 log.info("{} products remain".format(len(products)))
                 log.info("Downloading selected products.")
-                pyeo.queries_and_downloads.download_s2_data(products, l1_image_dir, l2_image_dir, download_source,
-                                                            user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
+                pyeo.queries_and_downloads.download_s2_data(products, 
+                                                            l1_image_dir, 
+                                                            l2_image_dir, 
+                                                            download_source,
+                                                            user=sen_user, 
+                                                            passwd=sen_pass, 
+                                                            try_scihub_on_fail=True)
             else:
                 log.info("Restricting query results to L1C products only.")
                 products = pyeo.queries_and_downloads.filter_to_l1_data(products)
                 log.info("Downloading selected products.")
-                pyeo.queries_and_downloads.download_s2_data(products, l1_image_dir, l2_image_dir, download_source,
-                                                            user=sen_user, passwd=sen_pass, try_scihub_on_fail=True)
+                pyeo.queries_and_downloads.download_s2_data(products, 
+                                                            l1_image_dir, 
+                                                            l2_image_dir, 
+                                                            download_source,
+                                                            user=sen_user,
+                                                            passwd=sen_pass,
+                                                            try_scihub_on_fail=True)
                 log.info("Applying sen2cor to downloaded L1C products.")
-                pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, l2_image_dir, sen2cor_path,
+                pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, 
+                                                                l2_image_dir, 
+                                                                sen2cor_path,
                                                                 delete_unprocessed_image=False)
 
         # Aggregating single band raster files into a single Geotiff file
         if do_merge or do_all:
             log.info("Merging all band files into a Geotiff file for each granule")
-            pyeo.raster_manipulation.preprocess_sen2_images(l2_image_dir, merged_image_dir, l1_image_dir,
-                                                            cloud_certainty_threshold, epsg=epsg,
+            pyeo.raster_manipulation.preprocess_sen2_images(l2_image_dir, 
+                                                            merged_image_dir, 
+                                                            l1_image_dir,
+                                                            cloud_certainty_threshold,
+                                                            epsg=epsg,
                                                             buffer_size=10)
 
         # Stack pairs of consecutive images into a single file
@@ -248,7 +283,9 @@ def rolling_detection(config_path,
                 log.info("Stacked image dir: {}".format(stacked_image_dir))
                 log.info("Mask file: {}".format(mask_path))
                 log.info("Masked image output dir: {}".format(masked_stacked_image_dir))
-                pyeo.raster_manipulation.apply_mask_to_dir(mask_path, stacked_image_dir, masked_stacked_image_dir)
+                pyeo.raster_manipulation.apply_mask_to_dir(mask_path, 
+                                                           stacked_image_dir, 
+                                                           masked_stacked_image_dir)
                 log.info("Copying corresponding cloud masks from: {}".format(stacked_image_dir))
                 log.info("  to: {}".format(masked_stacked_image_dir))
                 cloudmask_files = [os.path.join(stacked_image_dir,f) for f in os.listdir(stacked_image_dir) \
@@ -270,8 +307,13 @@ def rolling_detection(config_path,
                                                       "prob_{}".format(os.path.basename(masked_stacked_image_file)))
                     else:
                         new_prob_image = None
-                    pyeo.classification.classify_image(masked_stacked_image_file, model_path, new_class_image, new_prob_image,
-                                                       num_chunks=num_chunks, skip_existing=True, apply_mask=True)
+                    pyeo.classification.classify_image(masked_stacked_image_file, 
+                                                       model_path, 
+                                                       new_class_image, 
+                                                       new_prob_image,
+                                                       num_chunks=num_chunks, 
+                                                       skip_existing=True, 
+                                                       apply_mask=False)
 
             else:
                 log.info("Classifying image stacked with composite")
@@ -285,8 +327,13 @@ def rolling_detection(config_path,
                                                       "prob_{}".format(os.path.basename(stacked_image_file)))
                     else:
                         new_prob_image = None
-                    pyeo.classification.classify_image(stacked_image_file, model_path, new_class_image, new_prob_image,
-                                                       num_chunks=num_chunks, skip_existing=True, apply_mask=True)
+                    pyeo.classification.classify_image(stacked_image_file, 
+                                                       model_path, 
+                                                       new_class_image, 
+                                                       new_prob_image,
+                                                       num_chunks=num_chunks, 
+                                                       skip_existing=True, 
+                                                       apply_mask=True)
 
         # Build new composite
         if do_update or do_all:
@@ -309,7 +356,7 @@ if __name__ == "__main__":
     # Reading in config file
     parser = argparse.ArgumentParser(description='Downloads, preprocesses and classifies sentinel 2 images. A directory'
                                                  'structure to contain preprocessed and downloaded files will be'
-                                                 ' created at the aoi_root location specified in the config file.'
+                                                 'created at the aoi_root location specified in the config file.'
                                                  'If any of the step flags (d,p,m,a,s,c,u,r) are present, only those '
                                                  'steps will be performed - otherwise all processing steps will be '
                                                  'performed.')
