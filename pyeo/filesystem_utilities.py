@@ -118,6 +118,29 @@ def validate_config_file(config_path):
     #TODO: fill
     pass
 
+def get_filenames(path, filepattern, dirpattern):
+  '''
+  Finds all file names in a directory for which the file name matches a certain string pattern,
+    and the directory name matches a different string pattern.
+  Args:
+    path = string indicating the path to a directory in which the search will be done
+    filepattern = string of the file name pattern to search for
+    dirpattern = string of the directory name pattern to search for
+
+  Returns:
+    a list of all found files with the full path directory
+  '''
+
+  filelist = []
+
+  for root, dirs, files in os.walk(path, topdown=True):
+    dirs[:] = [d for d in dirs] 
+    for f in files:
+      if filepattern in f and dirpattern in root:
+        thisfile = os.path.join(root, f)
+        filelist.append(thisfile)
+
+  return(sorted(filelist))
 
 def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     """
@@ -137,18 +160,64 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
        1 if imagery is valid, 0 if not and 2 if an invalid .SAFE file
 
     """
+    def find_file(name, path):
+        for root, dirs, files in os.walk(path):
+            if name in files:
+                return os.path.join(root, name)
+
+    def find_dir(name, path):
+        for root, dirs, files in os.walk(path):
+            if name in dirs:
+                return os.path.join(root, name)
+
     if not l2_SAFE_file.endswith(".SAFE") or "L2A" not in l2_SAFE_file:
         log.info("{} does not exist.".format(l2_SAFE_file))
         return 2
     log.info("Checking {} for incomplete {} imagery".format(l2_SAFE_file, resolution))
+
+    bands=["B08","B04","B03","B02"]
+    nb=0
+    for band in bands:
+        f=find_file("*"+band+"*.jp2", l2_SAFE_file)
+        if f is not None:
+            log.info("Found file: {}".format(f))
+            nb=nb+1
+        else:
+            log.info("Band file not found for band: {}".format(band))
+    if nb == len(bands):
+        log.info("All necessary bands have been found")
+        return 1
+    else:
+        log.warning("Not all necessary bands have been found in the SAFE directory")
+        log.warning("n bands = {}".format(nb))
+        return 0
+
+    '''
+    # check whether the band rasters are in the IMG_DATA/R10 or similar subdirectory
     granule_path = r"GRANULE/*/IMG_DATA/R{}/*_B0[8,4,3,2]*.jp2".format(resolution)
     image_glob = os.path.join(l2_SAFE_file, granule_path)
     if len(glob.glob(image_glob)) == 4:
         log.info("All necessary bands are complete")
         return 1
     else:
-        log.warning("Not all necessary bands have been found in the SAFE directory")
-        return 0
+        #TODO: check whether the moving of band raster files into the "Rxx" subdirectory works OK
+        # check whether the band rasters are in the IMG_DATA subdirectory
+        granule_path = r"GRANULE/*/IMG_DATA/*_B0[8,4,3,2]*.jp2"
+        image_glob = os.path.join(l2_SAFE_file, granule_path)
+        if len(glob.glob(image_glob)) == 4:
+            log.info("All necessary bands are complete")
+            d=find_dir(r"GRANULE/*/IMG_DATA/R{}".format(resolution), l2_SAFE_file)
+            os.mkdir(d)
+            bands=["B08","B04","B03","B02"]
+            for band in bands:
+                path=glob.glob(os.path.join(l2_SAFE_file, r"GRANULE/*/IMG_DATA"))
+                f=find_file(band, l2_SAFE_file)
+                os.rename(f, os.path.join(os.path.dirname(f),r"R{}".format(resolution),os.path.basename(f)))
+            return 1
+        else:
+            log.warning("Not all necessary bands have been found in the SAFE directory")
+            return 0
+    '''
 
 
 def check_for_invalid_l1_data(l1_SAFE_file):

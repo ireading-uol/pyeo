@@ -2539,30 +2539,49 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
     rows = raster.RasterYSize
     pixelWidth = geotransform_of_image[1]
     pixelHeight = geotransform_of_image[5]
-    mask = gdal.Open(mask_path)
+    mask = gdal.Open(mask_path, gdal.GA_Update)
     geotransform_of_mask = mask.GetGeoTransform()
     if geotransform_of_image != geotransform_of_mask:
-        with TemporaryDirectory(dir=os.getcwd()) as td:
-            temp_path_1 = os.path.join(td, "reproj_mask_temp.tif")
-            #log.info("Geotransforms do not match. Reprojecting {} to {}.".format(mask_path, temp_path_1))
-            reproject_image(mask_path, temp_path_1, raster.GetProjectionRef(), do_post_resample = False)
-            #log.info("Output file exists? {}".format(str(os.path.exists(temp_path_1))))
-            temp_path_2 = os.path.join(td, os.path.basename(mask_path).split(".")[0]+"_warped_clipped.tif")
-            #log.info("Clipping {} to {} using extent from {}".format(temp_path_1, temp_path_2, image_path))
-            clip_raster_to_intersection(temp_path_1, image_path, temp_path_2, is_landsat=False)
-            mask_path = mask_path.split(".")[0]+"_warped_clipped_resampled.tif"
-            ds = gdal.Open(temp_path_2)
-            ds_out = gdal.Translate(mask_path, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear') 
-            ds = None
-            ds_out = None
-            mask = None
-            mask = gdal.Open(mask_path)
+        flag = True # True means the two geotransforms are almost identical and only have small rounding errors
+        for g in range(len(geotransform_of_mask)):
+            if geotransform_of_image[g] - geotransform_of_mask[g] > 0.000001:
+                flag = False # raise exception
+        if not flag:
+            with TemporaryDirectory(dir=os.getcwd()) as td:
+                temp_path_1 = os.path.join(td, "reproj_mask_temp.tif")
+                #log.info("Geotransforms do not match. Reprojecting {} to {}.".format(mask_path, temp_path_1))
+                reproject_image(mask_path, temp_path_1, raster.GetProjectionRef(), do_post_resample = False)
+                #log.info("Output file exists? {}".format(str(os.path.exists(temp_path_1))))
+                temp_path_2 = os.path.join(td, os.path.basename(mask_path).split(".")[0]+"_warped_clipped.tif")
+                #log.info("Clipping {} to {} using extent from {}".format(temp_path_1, temp_path_2, image_path))
+                clip_raster_to_intersection(temp_path_1, image_path, temp_path_2, is_landsat=False)
+                mask_path = mask_path.split(".")[0]+"_warped_clipped_resampled.tif"
+                ds = gdal.Open(temp_path_2)
+                ds_out = gdal.Translate(mask_path, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear') 
+                ds = None
+                ds_out = None
+                mask = None
+                mask = gdal.Open(mask_path, gdal.GA_Update)
+        else:
+            # copy the geotransform of the raster to the mask for consistency
+            #TODO: test this
+            mask.SetGeoTransform(geotransform_of_image)
+
     geotransform_of_mask = mask.GetGeoTransform()
     if geotransform_of_image != geotransform_of_mask:
-        log.warning("Could not bring the mask file into exactly the same projection as the image. Check co-registration visually.")
-        log.warning(mask_path)
-        log.warning(geotransform_of_mask)
-        log.warning(geotransform_of_image)
+        flag = True # True means the two geotransforms are almost identical and only have small rounding errors
+        for g in range(len(geotransform_of_mask)):
+            if geotransform_of_image[g] - geotransform_of_mask[g] > 0.000001:
+                flag = False # raise exception
+        if not flag:
+            log.warning("Could not bring the mask file into exactly the same projection as the image. Check co-registration visually.")
+            log.warning(mask_path)
+            log.warning(geotransform_of_mask)
+            log.warning(geotransform_of_image)
+        else:
+            # copy the geotransform of the raster to the mask for consistency
+            #TODO: test this
+            mask.SetGeoTransform(geotransform_of_image)
     mask_as_array = raster2array(mask_path)
     for band in range(bands):
         image_as_array[band, mask_as_array == 0] = 0

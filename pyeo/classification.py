@@ -209,7 +209,10 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
         log.info("   Classifying chunk {} of size {}".format(chunk_id, chunk_size))
         chunk_view = good_samples[offset : offset + chunk_size]
         #indices_view = good_indices[offset : offset + chunk_size]
+        log.info("   Creating out_view")
         out_view = classes[offset : offset + chunk_size]  # dimensions [chunk_size]
+        log.info("   Calling model.predict")
+        chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
         out_view[:] = model.predict(chunk_view)
 
         if prob_out_path:

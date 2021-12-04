@@ -44,6 +44,7 @@ def rolling_detection(config_path,
                       arg_start_date=None,
                       arg_end_date=None,
                       build_composite=False,
+                      tile_id=None,
                       num_chunks=None,
                       download_source="scihub",
                       flip_stacks=False,
@@ -71,7 +72,6 @@ def rolling_detection(config_path,
     sen_user = conf['sent_2']['user']
     sen_pass = conf['sent_2']['pass']
     project_root = conf['forest_sentinel']['root_dir']
-    tile_id = conf['forest_sentinel']['tile_id']
     aoi_path = conf['forest_sentinel']['aoi_path']
     start_date = conf['forest_sentinel']['start_date']
     end_date = conf['forest_sentinel']['end_date']
@@ -370,6 +370,8 @@ if __name__ == "__main__":
     parser.add_argument('-b', '--build_composite', dest='build_composite', action='store_true', default=False,
                         help="If present, creates a cloud-free (ish) composite between the two dates specified in the "
                              "config file.")
+    parser.add_argument("--tile", dest="tile_id", type=str, default="None", help="Overrides the geojson location with a"
+                                                                                  "Sentinel-2 tile ID location")
     parser.add_argument("--chunks", dest="num_chunks", type=int, default=10, help="Sets the number of chunks to split "
                                                                                   "images to in ml processing")
     parser.add_argument('--download_source', default="scihub", help="Sets the download source, can be scihub "
