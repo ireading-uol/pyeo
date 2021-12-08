@@ -119,28 +119,31 @@ def validate_config_file(config_path):
     pass
 
 def get_filenames(path, filepattern, dirpattern):
-  '''
-  Finds all file names in a directory for which the file name matches a certain string pattern,
+    '''
+    Finds all file names in a directory for which the file name matches a certain string pattern,
     and the directory name matches a different string pattern.
-  Args:
-    path = string indicating the path to a directory in which the search will be done
-    filepattern = string of the file name pattern to search for
-    dirpattern = string of the directory name pattern to search for
+    
+    Args:
+      path = string indicating the path to a directory in which the search will be done
+      filepattern = string of the file name pattern to search for
+      dirpattern = string of the directory name pattern to search for
 
-  Returns:
-    a list of all found files with the full path directory
-  '''
+    Returns:
+      a list of all found files with the full path directory
+    '''
 
-  filelist = []
+    log = logging.getLogger("pyeo")
 
-  for root, dirs, files in os.walk(path, topdown=True):
-    dirs[:] = [d for d in dirs] 
-    for f in files:
-      if filepattern in f and dirpattern in root:
-        thisfile = os.path.join(root, f)
-        filelist.append(thisfile)
-
-  return(sorted(filelist))
+    filelist = []
+    for root, dirs, files in os.walk(path, topdown=True):
+        #log.info("root, dirs, files: {}".format(root,dirs,files))
+        dirs[:] = [d for d in dirs] 
+        for f in files:
+            if filepattern in f and dirpattern in root:
+                thisfile = os.path.join(root, f)
+                #log.info("Found file: {}".format(thisfile))
+                filelist.append(thisfile)
+    return(sorted(filelist))
 
 def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     """
@@ -160,6 +163,10 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
        1 if imagery is valid, 0 if not and 2 if an invalid .SAFE file
 
     """
+
+    """
+    # NOT USED
+    
     def find_file(name, path):
         for root, dirs, files in os.walk(path):
             if name in files:
@@ -169,6 +176,9 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
         for root, dirs, files in os.walk(path):
             if name in dirs:
                 return os.path.join(root, name)
+    """
+
+    log = logging.getLogger("pyeo")
 
     if not l2_SAFE_file.endswith(".SAFE") or "L2A" not in l2_SAFE_file:
         log.info("{} does not exist.".format(l2_SAFE_file))
@@ -178,12 +188,14 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     bands=["B08","B04","B03","B02"]
     nb=0
     for band in bands:
-        f=find_file("*"+band+"*.jp2", l2_SAFE_file)
-        if f is not None:
-            log.info("Found file: {}".format(f))
+        f=get_filenames(l2_SAFE_file, band+".jp2", "")
+        if len(f) > 0:
+            log.info("Found file(s):")
+            for i in range(len(f)):
+                log.info("   {}".format(f[i]))
             nb=nb+1
         else:
-            log.info("Band file not found for band: {}".format(band))
+            log.warning("Band file not found for band: {}".format(band))
     if nb == len(bands):
         log.info("All necessary bands have been found")
         return 1

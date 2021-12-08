@@ -826,12 +826,12 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
         if 'L1C' in identifier:
             out_path = os.path.join(l1_dir, identifier + ".SAFE")
             if check_for_invalid_l1_data(out_path) == 1:
-                log.info("L1C imagery exists, skipping download")
+                log.info("{} imagery already exists, skipping download".format(out_path))
                 continue
         elif 'L2A' in identifier:
             out_path = os.path.join(l2_dir, identifier + ".SAFE")
             if check_for_invalid_l2_data(out_path) == 1:
-                log.info("L2A imagery exists, skipping download")
+                log.info("{} imagery already exists, skipping download".format(out_path))
                 continue
         else:
             log.error("{} is not a Sentinel 2 product".format(identifier))

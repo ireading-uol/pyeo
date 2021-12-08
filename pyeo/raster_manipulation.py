@@ -141,7 +141,7 @@ from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from
 from pyeo.array_utilities import project_array
 from pyeo.filesystem_utilities import sort_by_timestamp, get_sen_2_tiles, get_l1_safe_file, get_sen_2_image_timestamp, \
     get_sen_2_image_tile, get_sen_2_granule_id, check_for_invalid_l2_data, get_mask_path, get_sen_2_baseline, \
-    get_safe_product_type, get_change_detection_dates
+    get_safe_product_type, get_change_detection_dates, get_filenames
 from pyeo.exceptions import CreateNewStacksException, StackImagesException, BadS2Exception, NonSquarePixelException
 
 log = logging.getLogger("pyeo")
@@ -1979,32 +1979,41 @@ def get_sen_2_band_path(safe_dir, band, resolution=None):
     elif resolution == 60:
         res_string = "60m"
     else:
-        res_string = None
+        res_string = ""
 
+    #TODO: fix this
     if get_safe_product_type(safe_dir) == "MSIL1C":
-        band_glob = "GRANULE/*/IMG_DATA/*_{}*.*".format(band)
-        band_glob = os.path.join(safe_dir, band_glob)
-        band_paths = glob.glob(band_glob)
+        filepattern = "_"+band+".jp2"
+        band_paths = get_filenames(safe_dir, filepattern, "IMG_DATA")
+        #band_glob = "GRANULE/*/IMG_DATA/*_{}*.*".format(band)
+        #band_glob = os.path.join(safe_dir, band_glob)
+        #band_paths = glob.glob(band_glob)
         if not band_paths:
             raise FileNotFoundError("Band {} not found for safe file {}".format(band, safe_dir))
         band_path = band_paths[0]
 
     else:
         if res_string in ["10m", "20m", "60m"]:  # If resolution is given, then find the band of that resolution
-            band_glob = "GRANULE/*/IMG_DATA/R{}/*_{}_*.*".format(res_string, band)
-            band_glob = os.path.join(safe_dir, band_glob)
+            filepattern = "_"+band+"_"+res_string+".jp2"
+            #band_glob = "GRANULE/*/IMG_DATA/R{}/*_{}_*.*".format(res_string, band)
+            #band_glob = os.path.join(safe_dir, band_glob)
             try:
-                band_path = glob.glob(band_glob)[0]
+                band_paths = get_filenames(safe_dir, filepattern, res_string)
+                band_path = band_paths[0]
+                #band_path = glob.glob(band_glob)[0]
             except IndexError:
                 log.warning("Band {} not found of specified resolution, searching in other available resolutions".format(band))
 
         if res_string is None or 'band_path' not in locals():  # Else use the highest resolution available for that band
-            band_glob = "GRANULE/*/IMG_DATA/R*/*_{}_*.*".format(band)
-            band_glob = os.path.join(safe_dir, band_glob)
-            band_paths = glob.glob(band_glob)
-            try:
-                band_path = sorted(band_paths)[0] # Sorting alphabetically gives the highest resolution first
-            except TypeError:
+            band_paths=[]
+            for res in ["10m", "20m", "60m"]:
+                filepattern = "_"+band+"_"+res+".jp2"
+                band_paths.append(get_filenames(safe_dir, filepattern, res_string))
+                #band_glob = "GRANULE/*/IMG_DATA/R*/*_{}_*.*".format(band)
+                #band_glob = os.path.join(safe_dir, band_glob)
+                #band_paths = glob.glob(band_glob)
+            band_path = sorted(band_paths)[0] # Sorting alphabetically gives the highest resolution first
+            if band_path == []:
                 raise FileNotFoundError("Band {} not found for safe file {}". format(band, safe_dir))
     return band_path
 
@@ -2237,21 +2246,22 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
     # Opportunity for multithreading here
     for image in images:
         log.info("Atmospheric correction of {}".format(image))
+        log.info("   sen2cor path = " + sen2cor_path)
         image_path = os.path.join(in_directory, image)
+        log.info("   image path = " + image_path)
         # update the product discriminator part of the output file name
         # see https://sentinels.copernicus.eu/web/sentinel/user-guides/sentinel-2-msi/naming-convention
         image_timestamp = datetime.datetime.now().strftime(r"%Y%m%dT%H%M%S")
-        log.info("   sen2cor path = " + sen2cor_path)
-        out_name = build_sen2cor_output_path(image, image_timestamp, get_sen2cor_version(sen2cor_path))
-        log.info("   output name = " + out_name)
-        out_path = os.path.join(out_directory, out_name)
-        log.info("   output path = " + out_path)
-        out_glob = out_path.rpartition("_")[0] + "*"
-        log.info("   sen2cor path = " + sen2cor_path)
-        log.info("   image path = " + image_path)
         log.info("   sen2cor processing time stamp = " + image_timestamp)
+        out_name = build_sen2cor_output_path(image, image_timestamp, get_sen2cor_version(sen2cor_path))
+        log.info("   out name = " + out_name)
+        out_path = os.path.join(out_directory, out_name)
+        log.info("   out path = " + out_path)
+        out_glob = out_path.rpartition("_")[0] + "*"
+        #TODO: remove now timestamp from glob
+        log.info("   out glob = " + out_glob)
         if glob.glob(out_glob):
-            log.warning("{} exists. Skipping.".format(out_path))
+            log.warning("{} exists. Skipping atmospheric correction.".format(out_path))
             continue
         try:
             l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
@@ -2337,15 +2347,23 @@ def create_mask_from_confidence_layer(l2_safe_path, out_path, cloud_conf_thresho
     log = logging.getLogger(__name__)
     log.info("Creating mask for {} with {} confidence threshold".format(l2_safe_path, cloud_conf_threshold))
     if cloud_conf_threshold:
-        cloud_glob = "GRANULE/*/QI_DATA/*CLD*_20m.jp2"  # This should match both old and new mask formats
-        cloud_path = glob.glob(os.path.join(l2_safe_path, cloud_glob))[0]
+        cloud_paths = get_filenames(l2_safe_path, "_CLDPRB_R20.jp2", "QI_DATA")
+        if not cloud_paths:
+            raise FileNotFoundError("Cloud probability mask not found for safe file {}".format(l2_safe_path))
+        cloud_path = cloud_paths[0]
+        #cloud_glob = "GRANULE/*/QI_DATA/*CLD*_20m.jp2"  # This should match both old and new mask formats
+        #cloud_path = glob.glob(os.path.join(l2_safe_path, cloud_glob))[0]
         cloud_image = gdal.Open(cloud_path)
         cloud_confidence_array = cloud_image.GetVirtualMemArray()
         mask_array = (cloud_confidence_array < cloud_conf_threshold)
         cloud_confidence_array = None
     else:
-        cloud_glob = "GRANULE/*/IMG_DATA/R20m/*SCL*_20m.jp2"  # This should match both old and new mask formats
-        cloud_path = glob.glob(os.path.join(l2_safe_path, cloud_glob))[0]
+        cloud_paths = get_filenames(l2_safe_path, "_SCL_20m.jp2", "R20m")
+        if not cloud_paths:
+            raise FileNotFoundError("Scene classification layer (SCL) not found for safe file {}".format(l2_safe_path))
+        cloud_path = cloud_paths[0]
+        #cloud_glob = "GRANULE/*/IMG_DATA/R20m/*SCL*_20m.jp2"  # This should match both old and new mask formats
+        #cloud_path = glob.glob(os.path.join(l2_safe_path, cloud_glob))[0]
         cloud_image = gdal.Open(cloud_path)
         scl_array = cloud_image.GetVirtualMemArray()
         mask_array = np.isin(scl_array, (4, 5, 6))
