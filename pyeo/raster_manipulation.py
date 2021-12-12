@@ -804,11 +804,12 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
         log.info("   {} : {}".format(key, item))
 
 
-def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, format="GTiff", generate_date_image=True,
+def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, format="GTiff", chunks=10, generate_date_image=True,
                                       missing_data_value=0):
     """
     Works down in_raster_path_list, updating pixels in composite_out_path if not masked. Will also create a mask and
-    (optionally) a date image in the same directory.
+    (optionally) a date image in the same directory. Processes raster stacks by splitting them into a number of chunks
+    to avoid memory allocation errors.
 
     Parameters
     ----------
@@ -842,10 +843,11 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
 
     """
 
-    def median_of_raster_list(in_raster_path_list, out_raster_path, band=1, missing_data_value=0, format='GTiff'):
+    def median_of_raster_list(in_raster_path_list, out_raster_path, band=1, chunks=10, missing_data_value=0, format='GTiff'):
         """
         Calculates the median of each pixel in a list of rasters with one band of the same dimensions and map projection.
-        Excludes missing data values from the calculations.
+        Excludes missing data values from the calculations. Processes raster stacks by splitting them into a number of chunks
+        to avoid memory allocation errors.
 
         Parameters
         ----------
@@ -859,23 +861,8 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             Value for no data encoding, will be ignored in calculating the median
         format : str, optional
             Raster format for GDAL
-
-        NOTE: We build one large np array of all images (this requires that all data fits in memory)
         """
 
-        res = []
-        for f in in_raster_path_list:
-            ds = gdal.Open(f)
-            res.append(ds.GetRasterBand(band).ReadAsArray())
-            ds = None
-        stacked = np.dstack(res)
-        if missing_data_value is not None:
-            stacked = np.ma.masked_equal(stacked, missing_data_value)
-        median_raster = np.nanmedian(stacked, axis=-1)
-        # catch pixels where all rasters have NaN values and set them to missing_data_value
-        all_nan_locations = np.isnan(stacked).all(axis=-1)
-        median_raster[all_nan_locations] = missing_data_value
-        # copy metadata from first raster in the list
         in_raster = gdal.Open(in_raster_path_list[0])
         driver = gdal.GetDriverByName(format)
         projection = in_raster.GetProjection()
@@ -886,12 +873,47 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
         ysize = in_raster.RasterYSize
         temp_band = None
         in_raster = None
+        chunksize = int(np.ceil(ysize / chunks))
+        # create output raster file and copy metadata from first raster in the list
         result = driver.Create(out_raster_path, xsize=xsize, ysize=ysize, bands=1, eType=datatype)
         result.SetGeoTransform(in_gt)
         result.SetProjection(projection)
-        result.GetRasterBand(1).WriteArray(median_raster)
+        log.info("Chunk processing. {} chunks of size {}, {}.".format(chunks, chunksize, xsize)) 
+        for ch in range(chunks):
+            log.info("Processing chunk {}".format(ch)) 
+            xoff = 0
+            yoff = ch * chunksize
+            xs = xsize
+            # work out the size of the last chunk (residual)
+            if ch < chunks-1:
+                ys = chunksize
+            else:
+                ys = ysize - ch * chunksize
+            log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
+            res = [] # reset the stack of band rasters from all time slices
+            for f in in_raster_path_list:
+                log.info("Opening raster {}".format(f)) 
+                ds = gdal.Open(f)
+                b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
+                res.append(b)
+                ds = None
+            stacked = np.dstack(res)
+            if missing_data_value is not None:
+                stacked = np.ma.getdata(np.ma.masked_equal(stacked, missing_data_value))
+            median_raster = np.nanmedian(stacked, axis=-1)
+            # catch pixels where all rasters have NaN values and set them to missing_data_value
+            all_nan_locations = np.isnan(stacked).all(axis=-1)
+            median_raster[all_nan_locations] = missing_data_value
+            #TODO: check whether this works - writing to the correct position in the raster
+            b = result.GetRasterBand(1).ReadAsArray()
+            log.info("Broadcasting from [{}:{}, {}:{}]".format(0, median_raster.shape[0], 0, median_raster.shape[1]))
+            log.info("Broadcasting into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
+            b[yoff:(yoff+ys), xoff:(xoff+xs)] = median_raster
+            result.GetRasterBand(1).WriteArray(b)
         result = None        
-
+        res = None
+        b = None
+        median_raster = None
 
     log = logging.getLogger(__name__)
     driver = gdal.GetDriverByName(format)
@@ -908,17 +930,17 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
     # Creating output image + array
     log.info("-------------------------------------------------")
     log.info("Creating median composite at {}".format(composite_out_path))
-    log.info("Using {} input raster files:".format(len(in_raster_path_list)))
-    for i in in_raster_path_list:
-        log.info("   {}".format(i))
+    #log.info("Using {} input raster files:".format(len(in_raster_path_list)))
+    #for i in in_raster_path_list:
+    #    log.info("   {}".format(i))
 
     mask_paths = []
     for i, in_raster in enumerate(in_raster_path_list):
         mask_paths.append(get_mask_path(in_raster_path_list[i]))
     mask_paths = [f for f in mask_paths if "_masked" not in f] #remove already masked tiff files to avoid double-processing
-    log.info("Mask paths for input raster files:")
-    for i in mask_paths:
-        log.info("   {}".format(i))
+    #log.info("Mask paths for input raster files:")
+    #for i in mask_paths:
+    #    log.info("   {}".format(i))
 
     # apply mask to each raster file
     masked_image_paths = []
@@ -926,35 +948,39 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
     for i, in_raster in enumerate(image_files):
         masked_image_path = in_raster.split('.')[0] + '_masked.tif'
         masked_image_paths.append(masked_image_path)
-        log.info('Producing cloud-masked image file: {}'.format(masked_image_path))
-        log.info('   from mask: {}'.format(mask_paths[i]))
-        log.info('   and raster: {}'.format(in_raster))
         if os.path.exists(masked_image_path):
-            log.warning("Output file already exists, skipping the masking step.")
+            log.info("Output file {} already exists, skipping the masking step.".format(masked_image_path))
         else:    
+            log.info('Producing cloud-masked image file: {}'.format(masked_image_path))
+            log.info('   from mask: {}'.format(mask_paths[i]))
+            log.info('   and raster: {}'.format(in_raster))
             apply_mask_to_image(mask_paths[i], in_raster, masked_image_path)
-        # log some image stats
-        get_stats_from_raster_file(in_raster)
-        get_stats_from_raster_file(masked_image_path)
+            # log some image stats
+            get_stats_from_raster_file(in_raster)
+            get_stats_from_raster_file(masked_image_path)
+            log.info('Finished application of masks to rasters.')
 
     # use raster stacking to calculate the median over all masked raster files and all 4 bands
     #TODO: get number of bands from first raster file
+    log.info('Beginning median calculations.')
     tmpfiles = []
     for band in range(4):
-        tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
-        tmpfiles.append(tmpfile)
         log.info('Band {} - calculating median composite across all images using raster stacking'.format(band+1))
         log.info('   Ignoring missing data value of {}'.format(missing_data_value))
-        median_of_raster_list(masked_image_paths, tmpfile, band=band+1, missing_data_value=missing_data_value)
+        tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
+        tmpfiles.append(tmpfile)
+        median_of_raster_list(masked_image_paths, tmpfile, band=band+1, chunks=chunks, missing_data_value=missing_data_value)
         # log some image stats
         get_stats_from_raster_file(tmpfile)
+    log.info('Finished median calculations.')
 
     # Aggretating band composites into a single tiff file
+    log.info('Aggretating band composites into a single raster file.')
     stack_images(tmpfiles, composite_out_path, geometry_mode="intersect")
     get_stats_from_raster_file(composite_out_path)
     for tmpfile in tmpfiles:
         os.remove(tmpfile)
-    log.info("Composite done")
+    log.info("Median composite done")
     log.info("Creating composite mask at {}".format(composite_out_path.rsplit(".")[0]+".msk"))
     combine_masks(mask_paths, composite_out_path.rsplit(".")[0]+".msk", combination_func='or', geometry_func="union")
     return composite_out_path
@@ -1069,11 +1095,8 @@ def composite_directory(image_dir, composite_out_dir, format="GTiff", generate_d
     composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
     return composite_out_path
 
-def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", generate_date_images=False):
+def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chunks=10, generate_date_images=False):
     """
-    WARNING: DEVELOPMENT VERSION OF THE FUNCTION composite_directory
-    #TODO: finish off and test it
-
     Using composite_images_with_mask, creates a composite containing every image in image_dir. This will
       place a file named composite_[last image date].tif inside composite_out_dir
 
@@ -1096,7 +1119,7 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", gen
 
     """
     log = logging.getLogger(__name__)
-    log.info("Cleverly compositing all images in directory {}".format(image_dir))
+    log.info("Cleverly compositing all images in directory into a median composite: {}".format(image_dir))
     sorted_image_paths = [os.path.join(image_dir, image_name) for image_name
                           in sort_by_timestamp(os.listdir(image_dir), recent_first=False)
                           if image_name.endswith(".tif")]
@@ -1110,7 +1133,7 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", gen
         log.info("Image number {} has time stamp {}".format(i+1, timestamp))
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
     composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
-    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
+    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, chunks=chunks, generate_date_image=generate_date_images)
     return composite_out_path
 
 def flatten_probability_image(prob_image, out_path):

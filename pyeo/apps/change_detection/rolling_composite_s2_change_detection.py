@@ -162,70 +162,72 @@ def rolling_detection(config_path,
                                                                     composite_l2_image_dir,
                                                                     sen2cor_path,
                                                                     delete_unprocessed_image=False)
+            if do_merge or do_all:
+                log.info("Merging raster bands into single files for each image")
+                pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, 
+                                                                composite_merged_dir,
+                                                                composite_l1_image_dir,
+                                                                cloud_certainty_threshold, 
+                                                                epsg=epsg, 
+                                                                buffer_size=10)
 
-            log.info("Merging raster bands into single files for each image")
-            pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, 
-                                                            composite_merged_dir,
-                                                            composite_l1_image_dir,
-                                                            cloud_certainty_threshold, 
-                                                            epsg=epsg, 
-                                                            buffer_size=10)
             log.info("Building initial cloud-free composite from directory {}".format(composite_dir))
             pyeo.raster_manipulation.clever_composite_directory(composite_merged_dir, 
                                                                 composite_dir, 
+                                                                chunks=30,
                                                                 generate_date_images=True)
 
-        # Query and download all images since last composite
-        if do_download or download_l2_data or do_all:
-            products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
-                                                                            start_date, 
-                                                                            end_date, 
-                                                                            conf,
-                                                                            cloud_cover=cloud_cover,
-                                                                            tile_id=tile_id) 
-            if download_l2_data:
-                log.info("Restricting query results to include only matching L1C and L2A products.")
-                products = pyeo.queries_and_downloads.filter_non_matching_s2_data(products)
-                log.info("{} products remain".format(len(products)))
-                log.info("Downloading selected products.")
-                pyeo.queries_and_downloads.download_s2_data(products, 
-                                                            l1_image_dir, 
-                                                            l2_image_dir, 
-                                                            download_source,
-                                                            user=sen_user, 
-                                                            passwd=sen_pass, 
-                                                            try_scihub_on_fail=True)
-            else:
-                log.info("Restricting query results to L1C products only.")
-                products = pyeo.queries_and_downloads.filter_to_l1_data(products)
-                log.info("Downloading selected products.")
-                pyeo.queries_and_downloads.download_s2_data(products, 
-                                                            l1_image_dir, 
-                                                            l2_image_dir, 
-                                                            download_source,
-                                                            user=sen_user,
-                                                            passwd=sen_pass,
-                                                            try_scihub_on_fail=True)
-                log.info("Applying sen2cor to downloaded L1C products.")
-                pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, 
+        else:
+            # If build_composite is not set, query and download all images since the last composite was created or updated
+            if do_download or download_l2_data or do_all:
+                products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
+                                                                                start_date, 
+                                                                                end_date, 
+                                                                                conf,
+                                                                                cloud_cover=cloud_cover,
+                                                                                tile_id=tile_id) 
+                if download_l2_data:  
+                    log.info("Restricting query results to include only matching L1C and L2A products.")
+                    products = pyeo.queries_and_downloads.filter_non_matching_s2_data(products)
+                    log.info("{} products remain".format(len(products)))
+                    log.info("Downloading selected products.")
+                    pyeo.queries_and_downloads.download_s2_data(products, 
+                                                                l1_image_dir, 
                                                                 l2_image_dir, 
-                                                                sen2cor_path,
-                                                                delete_unprocessed_image=False)
+                                                                download_source,
+                                                                user=sen_user, 
+                                                                passwd=sen_pass, 
+                                                                try_scihub_on_fail=True)
+                else:
+                    log.info("Restricting query results to L1C products only.")
+                    products = pyeo.queries_and_downloads.filter_to_l1_data(products)
+                    log.info("Downloading selected products.")
+                    pyeo.queries_and_downloads.download_s2_data(products, 
+                                                                l1_image_dir, 
+                                                                l2_image_dir, 
+                                                                download_source,
+                                                                user=sen_user,
+                                                                passwd=sen_pass,
+                                                                try_scihub_on_fail=True)
+                    log.info("Applying sen2cor to downloaded L1C products.")
+                    pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, 
+                                                                    l2_image_dir, 
+                                                                    sen2cor_path,
+                                                                    delete_unprocessed_image=False)
 
-        # Aggregating single band raster files into a single Geotiff file
-        if do_merge or do_all:
-            log.info("Merging all band files into a Geotiff file for each granule")
-            pyeo.raster_manipulation.preprocess_sen2_images(l2_image_dir, 
-                                                            merged_image_dir, 
-                                                            l1_image_dir,
-                                                            cloud_certainty_threshold,
-                                                            epsg=epsg,
-                                                            buffer_size=10)
+            # Aggregating single band raster files into a single Geotiff file
+            if do_merge or do_all:
+                log.info("Merging all band files into a Geotiff file for each granule")
+                pyeo.raster_manipulation.preprocess_sen2_images(l2_image_dir, 
+                                                                merged_image_dir, 
+                                                                l1_image_dir,
+                                                                cloud_certainty_threshold,
+                                                                epsg=epsg,
+                                                                buffer_size=10)
 
-        # Stack pairs of consecutive images into a single file
+        # Irrespective of whether build_composite is selected, stack pairs of consecutive images into a single file
         if do_stack or do_all:
             log.info("Stacking pairs of consecutive images into single files")
-
             log.info("Finding most recent image composite")
             try:
                 latest_composite_name = \
@@ -254,7 +256,6 @@ def rolling_detection(config_path,
 
             for image in images:
                 new_image_path = os.path.join(merged_image_dir, image)
-    
                 # Stack with preceding composite
                 try:
                     latest_composite_path = pyeo.filesystem_utilities.get_preceding_image_path(new_image_path,
