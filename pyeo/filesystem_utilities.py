@@ -234,10 +234,10 @@ def get_raster_paths(paths, filepatterns, dirpattern):
                 log.error("  dirpattern = {}".format(dirpattern))
         results.append(row)
     arr = np.array(results).reshape(len(paths), len(row))
-    log.info("Array shape = {}".format(arr.shape))
-    log.info("Cols = {}".format(cols))
+    #log.info("Array shape = {}".format(arr.shape))
+    #log.info("Cols = {}".format(cols))
     results=pd.DataFrame(arr, columns=cols)
-    log.info("DF = {}".format(results))
+    #log.info("DF = {}".format(results))
     return(results)
 
 def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
