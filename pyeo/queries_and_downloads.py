@@ -99,9 +99,12 @@ try:
 except ImportError:
     pass
 
+api_url = 'https://scihub.copernicus.eu/dhus/'
+rest_url = "https://apihub.copernicus.eu/apihub/search"
+#api_url = "https://apihub.copernicus.eu/apihub/"
 
-def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0):
-    #TODO: Test the solution to extend this function to allow for more than 10 search results by implementing pagination
+def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0, filename=None):
+    # Allows for more than 10 search results by implementing pagination
     # https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI?redirectedfrom=SciHubUserGuide.6OpenSearchAPI
     # Results sets over the maximum can be obtained through paging of from different start values.
     #    Page 1: https://scihub.copernicus.eu/dhus/search?start=0&rows=100&q=*
@@ -109,24 +112,21 @@ def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, st
     #    Page 3: https://scihub.copernicus.eu/dhus/search?start=200&rows=100&q=*
     session = requests.Session()
     session.auth = (user, passwd)
-    rest_url = "https://apihub.copernicus.eu/apihub/search"
-
-
     search_params = {
-        "platformname": "((Sentinel-2))",
-        "footprint": '(\"Intersects({})\")'.format(footprint_wkt),
-        "beginposition": "[{} TO {}]".format(start_date, end_date),
-        "endposition": "[{} TO {}]".format(start_date, end_date),
-        "cloudcoverpercentage": "[0 TO {}]".format(cloud)
-    }
+            "platformname": "((Sentinel-2))",
+            "footprint": '(\"Intersects({})\")'.format(footprint_wkt),
+            "beginposition": "[{} TO {}]".format(start_date, end_date),
+            "endposition": "[{} TO {}]".format(start_date, end_date),
+            "cloudcoverpercentage": "[0 TO {}]".format(cloud),
+            "producttype": "({})".format(producttype),
+            "filename": "({})".format(filename)
+            }
     search_string = " AND ".join([f"{term}:{query}" for term, query in search_params.items()])
-
     request_params = {
         "q"    : search_string,
         "rows" : 100,
-        "start": start_row,
+        "start": start_row
     }
-
     results = session.get(rest_url, timeout=600, params=request_params)
     if results.status_code >= 400:
         print("Bad request: code {}".format(results.status_code))
@@ -135,13 +135,48 @@ def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, st
     return _rest_out_to_json(results)
 
 
-def _tile_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0):
+def _file_api_query(user, passwd, start_date, end_date, filename, cloud=100, producttype="S2MSI2A"):
+    api = SentinelAPI(user, passwd, timeout=600)
+    query_kwargs = {
+        'platformname': 'Sentinel-2',
+        'date': (start_date, end_date),
+        'cloudcoverpercentage': (0, cloud),
+        'producttype': producttype
+        }
+    kw = query_kwargs.copy()
+    kw['raw'] = f'filename:{filename}'
+    products = api.query(**kw)
+    return(products)
+
+
+def _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0, 
+    producttype="S2MSI1C", filename=None):
+    api = SentinelAPI(user, passwd, timeout=600)
+    query_kwargs = {
+        'platformname': 'Sentinel-2',
+        'cloudcoverpercentage': (0, cloud),
+        'date': (start_date, end_date),
+        'tileid': tile_id,
+        #'rows': 100,
+        #'startrow': start_row,
+        #'url': api_url,
+        'producttype': producttype
+        }
+    kw = query_kwargs.copy()
+    if filename is not None:
+        kw['raw'] = f'filename:{filename}'
+    products = api.query(**kw)
+    return(products)
+
+
+def _tile_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0, producttype="S2MSI1C"):
     session = requests.Session()
     session.auth = (user, passwd)
-    rest_url = "https://apihub.copernicus.eu/apihub/search"
+    #rest_url = "https://apihub.copernicus.eu/apihub/search"
 
     search_params = {
         "platformname": "((Sentinel-2))",
+        "producttype": producttype,
         "tileid": tile_id,
         "beginposition": "[{} TO {}]".format(start_date, end_date),
         "endposition": "[{} TO {}]".format(start_date, end_date),
@@ -166,9 +201,8 @@ def _tile_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_ro
 def _rest_out_to_json(result):
     root = ElementTree.fromstring(result.content.replace(b"\n", b""))
     total_results = int(root.find("{http://a9.com/-/spec/opensearch/1.1/}totalResults").text)
-    if total_results > 10:
-        log.info("Local querying with more than 10 search results should work now.")
-        log.info("If not, please log it as a todo issue on Github.")
+    #if total_results > 10:
+    #    log.info("Local querying can now return more than 10 search results.")
     if total_results == 0:
         log.warning("Query produced no results.")
     out = {}
@@ -204,7 +238,7 @@ def _sentinelsat_query(user, passwd, footprint_wkt, start_date, end_date, cloud=
     products = api.query(footprint_wkt,
                          date=(start_date, end_date), platformname="Sentinel-2",
                          cloudcoverpercentage="[0 TO {}]".format(cloud),
-                         url="https://apihub.copernicus.eu/apihub/")
+                         url=rest_url)
     return products
 
 
@@ -218,7 +252,7 @@ def _is_4326(geom):
         return False
 
 
-def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile_id='None', start_row=0):
+def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile_id='None', start_row=0, producttype=None, filename=None):
     """
     Fetches a list of Sentinel-2 products
 
@@ -254,6 +288,13 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile
     start_row : int
         integer of the start row of the query results, can be 0,100,200,... if more than 100 results are returned
 
+    producttype : str
+        string describing the product type, e.g. 'S2MSI2A' or 'S2MSI1C'
+
+    filename : str
+        file name pattern to be used in the query
+
+
     Returns
     -------
     products : dict
@@ -270,11 +311,8 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile
         # Preprocessing dates
         start_date = _date_to_timestamp(start_date)
         end_date = _date_to_timestamp(end_date)
-
-        log.warning("tile_id = {}".format(tile_id))
-        if tile_id == 'None':
-            log.warning("tile_id == None")
-            # Preprocessing geometry
+        if tile_id == 'None' or tile_id == '':
+            # Preprocessing geojson geometry
             geom = ogr.Open(geojsonfile)
             if not _is_4326(geom):
                 reproj_geom_path = os.path.join(td, "temp.shp")
@@ -286,15 +324,26 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile
                 footprint = shapefile_to_wkt(geojsonfile)
             else:
                 raise InvalidGeometryFormatException("Please provide a .json, .geojson or a .shp as geometry.")
-            log.info("Sending Sentinel-2 query:\nfootprint: {}\nstart_date: {}\nend_date: {}\n cloud_cover: {} ".format(
-                footprint, start_date, end_date, cloud))
-            return _rest_query(user, passwd, footprint, start_date, end_date, cloud, start_row)
+            log.info("Sending Sentinel-2 query for GeoJSON:")
+            log.info("   footprint: {}".format(footprint))
+            log.info("   start_date: {}".format(start_date))
+            log.info("   end_date: {}".format(end_date))
+            log.info("   cloud_cover: {}".format(cloud))
+            log.info("   start_row: {}".format(start_row))
+            log.info("   product_type: {}".format(producttype))
+            log.info("   file_name: {}".format(filename))
+            return _rest_query(user, passwd, footprint, start_date, end_date, cloud, start_row, producttype, filename)
         else:
-            log.warning("tile_id != None")
-            #todo: TEST THIS BIT
-            log.info("Sending Sentinel-2 query:\ntile_id: {}\nstart_date: {}\nend_date: {}\n cloud_cover: {} ".format(
-                tile_id, start_date, end_date, cloud))
-            return _tile_query(user, passwd, tile_id, start_date, end_date, cloud, start_row)
+            log.info("Sending Sentinel-2 query for Tile:")
+            log.info("   tile_id: {}".format(tile_id))
+            log.info("   start_date: {}".format(start_date))
+            log.info("   end_date: {}".format(end_date))
+            log.info("   cloud_cover: {}".format(cloud))
+            log.info("   start_row: {}".format(start_row))
+            log.info("   product_type: {}".format(producttype))
+            log.info("   file_name: {}".format(filename))
+            return _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud, start_row, producttype, filename)
+            #return _tile__query(user, passwd, tile_id, start_date, end_date, cloud, start_row, producttype)
 
 
 def _date_to_timestamp(date):
@@ -512,7 +561,7 @@ def get_landsat_api_key(conf, session):
     return session_key
 
 
-def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None'):
+def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None', producttype=None, filename=None):
     """
     Gets all the products between start_date and end_date. Wraps sent2_query to avoid having passwords and
     long-format timestamps in code.
@@ -545,6 +594,9 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     tile_id : str
         Sentinel-2 granule ID - only required in no geojson file is given and tile-based processing
         is selected. Default: 'None' - no tile-based search but aoi-based search
+ 
+    filename : str
+        Sentinel-2 file name pattern to be used in the query. Default: None
 
     Returns
     -------
@@ -552,20 +604,15 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         A dictionary of Sentinel 2 products.
 
     """
-    if tile_id == 'None':
-        log.info("Querying for imagery between {} and {} for aoi {}".format(start_date, end_date, aoi_path))
-    else:
-        log.info("Querying for imagery between {} and {} for tile ID {}".format(start_date, end_date, tile_id))
     user = conf['sent_2']['user']
     password = conf['sent_2']['pass']
     start_timestamp = dt.datetime.strptime(start_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
     end_timestamp = dt.datetime.strptime(end_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
-    #TODO: Test that the loop over pages works for over 100 results
     rolling_n = 0 # rolling number of search results
     n = 100 # number of individual search results of each query
     while n == 100:
         result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover, tile_id=tile_id, 
-                             start_row=rolling_n)
+                             start_row=rolling_n, producttype=producttype, filename=filename)
         try:
             rolling_result
         except NameError:
@@ -576,7 +623,8 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
             rolling_n = rolling_n + n
             log.info("This query returned {} new images. The overall list now has {} images.".format(len(result), len(rolling_result)))
         if n ==100:
-            log.info("Submitting new query starting from image number {}".format(rolling_n))
+            log.info("Submitting new query starting from row number {}".format(rolling_n))
+    log.info("Queries returned {} new images in total.".format(len(rolling_result)))
     return rolling_result
 
 
@@ -669,14 +717,73 @@ def filter_non_matching_s2_data(query_output):
 
     # Finally, check that there is actually something here.
     if len(out_set) == 0:
-        log.error(
-            "No L2A data detected for query. Please remove the --download_l2_data flag or request more recent images.")
+        log.warning(
+            "No L2A data detected for query. Searching for L1C data instead.")
        # raise NoL2DataAvailableException
     #TODO: generate log info
     #filenames = [f for key, f in itertools.groupby(out_set, key=get_query_filename)]
     #log.info("Sorted output query results: {}".format(filenames))
     return out_set
 
+def filter_unique_l1c_and_l2a_data(df):
+    """
+    Filters a dataframe from a query result such that it contains only unique Sentinel-2
+    datatakes, based on 'beginposition'.
+    Retains L2A metadata and only retains L1C metadata if no L2A product for that datatake
+    has been found.
+
+    Parameters
+    ----------
+    df : pandas dataframe with query results
+
+    Returns
+    -------
+    l1c, l2a : pandas dataframes containing only unique L1C and L2A datatakes
+
+    """
+
+    products_df = df.sort_values('beginposition')
+    #  find those pairs of rows where the beginposition is duplicated
+    n = products_df.shape[0]
+    rows2drop = []
+    for r in range(n-1):
+        r1 = products_df.iloc[r,:]['beginposition']
+        r2 = products_df.iloc[r+1,:]['beginposition']
+        if r1==r2:
+            if products_df.iloc[r,:]['processinglevel'] == 'Level-1C':
+                rows2drop.append(r)
+            else:
+                if products_df.iloc[r+1,:]['processinglevel'] == 'Level-1C':
+                    rows2drop.append(r+1)
+                else:
+                    log.warning("Neither of the matching rows in the query result is L1C.")
+    if len(rows2drop) > 0:
+        log.info("L1C data with matching beginposition to be dropped:")
+        for i in list(products_df.iloc[rows2drop,:].index):
+            log.info("  {}".format(i))
+        products_df = products_df.drop(index=list(products_df.iloc[rows2drop,:].index))
+    #  find all L1C data that remain in the dataframe
+    n = products_df.shape[0]
+    l1c = []
+    for r in range(n):
+        if products_df.iloc[r,:]['processinglevel'] == 'Level-1C':
+            l1c.append(r)
+    if len(l1c) > 0:
+        log.info("L1C data that need atmospheric correction:")
+        for i in list(products_df.iloc[l1c,:].index):
+            log.info("  {}".format(i))
+        l1c_df = products_df[products_df.loc[:,'processinglevel'] == 'Level-1C']
+    else:
+        l1c_df = []
+    l2a = []
+    for r in range(n):
+        if products_df.iloc[r,:]['processinglevel'] == 'Level-2A':
+            l2a.append(r)
+    if len(l2a) > 0:
+        l2a_df = products_df[products_df.loc[:,'processinglevel'] == 'Level-2A']
+    else:
+        l2a_df = []
+    return(l1c_df, l2a_df)
 
 def get_query_datatake(query_item):
     """
@@ -890,6 +997,68 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
         '''
 
 
+def download_s2_data_from_df(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None, 
+                             try_scihub_on_fail=False):
+    """
+    Downloads S2 imagery from AWS, google_cloud or scihub. new_data is a dict from Sentinel_2.
+
+    Parameters
+    ----------
+    new_data : pandas dataframe
+        A query dataframe containing the products you want to download
+    l1_dir : str
+        The directory to download level 1 products to.
+    l2_dir : str
+        The directory to download level 2 products to.
+    source : {'scihub', 'aws'}
+        The source to download the data from. Can be 'scihub' or 'aws'; see section introduction for details
+    user : str, optional
+        The username for sentinelhub
+    passwd : str, optional
+        The password for sentinelhub
+    try_scihub_on_fail : bool, optional
+        If true, this function will roll back to downloading from Scihub on a failure of any other downloader. Defaults
+        to `False`.
+
+    Raises
+    ------
+    BadDataSource
+        Raised when passed either a bad datasource or a bad image ID
+
+    """
+    for index, image_uuid in new_data.iterrows():
+        identifier = image_uuid['identifier']
+        log.info("  {}   {}".format(index, identifier))
+        if 'L1C' in identifier:
+            out_path = os.path.join(l1_dir, identifier + ".SAFE")
+            if check_for_invalid_l1_data(out_path) == 1:
+                log.info("{} imagery already exists, skipping download".format(out_path))
+                continue
+        elif 'L2A' in identifier:
+            out_path = os.path.join(l2_dir, identifier + ".SAFE")
+            if check_for_invalid_l2_data(out_path) == 1:
+                log.info("{} imagery already exists, skipping download".format(out_path))
+                continue
+        else:
+            log.error("{} is not a Sentinel 2 product".format(identifier))
+            raise BadDataSourceExpection
+        out_path = os.path.dirname(out_path)
+        log.info("Downloading {} from {} to {}".format(identifier, source, out_path))
+        if source == 'aws':
+            if try_scihub_on_fail:
+                download_from_aws_with_rollback(product_id=index, folder=out_path,
+                                                uuid=image_uuid, user=user, passwd=passwd)
+            else:
+                download_safe_format(product_id=index, folder=out_path)
+        #elif source == 'google':
+        #    download_from_google_cloud([identifier], out_folder=out_path)
+        elif source == 'scihub':
+            download_from_scihub(index, out_path, user, passwd)
+        else:
+            log.error("Invalid data source; valid values are 'aws' and 'scihub'")
+            raise BadDataSourceExpection
+
+
 def download_s2_pairs(l1_dir, l2_dir, conf):
     """
     Given a pair of folders, one containing l1 products and the other containing l2 products, will query and download
@@ -1028,7 +1197,7 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
 
     """
     api = SentinelAPI(user, passwd, timeout=600)
-    api.api_url = "https://apihub.copernicus.eu/apihub/"
+    api.api_url = api_url
     #log.info("Downloading {} from scihub".format(product_uuid))
     is_online = api.is_online(product_uuid)
     if is_online:
@@ -1038,18 +1207,20 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
             log.error("Product {} not found. Please check manually on the Copernicus Open Data Hub.".format(product_uuid))
             return 1
     else:
-        #TODO: fix error in Sentinelsat at this point
-        log.warning("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
-        log.warning("Remember: \'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")
+        log.info("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
+        log.info("Remember: \'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")
         @tenacity.retry(stop=tenacity.stop_after_attempt(5), wait=tenacity.wait_fixed(601))
         def download_all(*args, **kwargs):
             return api.download_all(*args, **kwargs)
         downloaded, triggered, failed = api.download_all([product_uuid], out_folder, max_attempts=10, checksum=True,
                                                      n_concurrent_dl=2, lta_retry_delay=600)
         prod = downloaded[product_uuid]
-        log.info("Downloaded: {}".format(prod))
-        log.info("Triggered: {}".format(triggered))
-        log.info("Failed: {}".format(failed))
+        if len(downloaded) > 0:
+            log.info("Downloaded: {}".format(prod))
+        if len(triggered) > 0:
+            log.info("Triggered: {}".format(triggered))
+        if len(failed) > 0:
+            log.warning("Failed: {}".format(failed))
     zip_path = os.path.join(out_folder, prod['title'] + ".zip")
     log.info("Unzipping {} to {}".format(zip_path, out_folder))
     zip_ref = zipfile.ZipFile(zip_path, 'r')

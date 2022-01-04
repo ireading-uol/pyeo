@@ -21,7 +21,9 @@ import datetime
 import datetime as dt
 import glob
 import logging
+import numpy as np
 import os
+import pandas as pd
 import re
 import shutil
 
@@ -113,6 +115,51 @@ def create_file_structure(root):
         except FileExistsError:
             pass
 
+def create_folder_structure_for_tiles(root):
+    """
+    Creates the folder structure used in tile_based_change_detection.py: ::
+        root
+        -images
+        --L1C
+        --L2A
+        --cloud_masked
+        -composite
+        --L1C
+        --L2A
+        --cloud_masked
+        -output
+        --classified
+        --probabilities
+
+    Parameters
+    ----------
+    root : str
+        The root folder for the file strucutre
+    """
+
+    if not os.path.exists(root):
+        os.makedirs(root)
+    os.chdir(root)
+    dirs = [
+        "composite/",
+        "composite/L1C",
+        "composite/L2A",
+        "composite/cloud_masked",
+        "images/",
+        "images/L1C/",
+        "images/L2A/",
+        "images/cloud_masked/",
+        "output/",
+        "output/classified",
+        "output/probabilities",
+        "log/"
+    ]
+    for dir in dirs:
+        try:
+            os.mkdir(dir)
+        except FileExistsError:
+            pass
+
 
 def validate_config_file(config_path):
     #TODO: fill
@@ -145,6 +192,54 @@ def get_filenames(path, filepattern, dirpattern):
                 filelist.append(thisfile)
     return(sorted(filelist))
 
+
+def get_raster_paths(paths, filepatterns, dirpattern):
+    '''
+    Iterates over get_filenames for different paths and different file patterns and 
+    returns a dataframe of all directory paths that match the conditions together with
+    the root path in which they were found.
+    
+    Args:
+      paths = list of strings indicating the path to a root directory in which the search will be done
+      filepatterns = list of strings of the file name patterns to search for
+      dirpattern = string of the directory name pattern to search for
+
+    Returns:
+      a dataframe of all found file paths, one line per path
+    '''
+    cols = ['safe_path']
+    for filepattern in filepatterns:
+        cols.append(filepattern)
+    results = []
+    # iterate over all SAFE directories
+    for path in paths:
+        row = [path]
+        # iterate over all band file name patterns
+        for filepattern in filepatterns:
+            f = get_filenames(path, filepattern, dirpattern)
+            if len(f) == 1:
+                row.append(f)
+            if len(f) > 1:
+                log.warning("More than one file path returned in raster path search:")
+                log.error("  root = {}".format(path))
+                log.error("  filepattern = {}".format(filepattern))
+                log.error("  dirpattern = {}".format(dirpattern))
+                log.error("The search returned:")
+                for i in f:
+                    log.error("  {}".format(i))
+            if len(f) == 0:
+                log.error("File path not found:")
+                log.error("  root = {}".format(path))
+                log.error("  filepattern = {}".format(filepattern))
+                log.error("  dirpattern = {}".format(dirpattern))
+        results.append(row)
+    arr = np.array(results).reshape(len(paths), len(row))
+    log.info("Array shape = {}".format(arr.shape))
+    log.info("Cols = {}".format(cols))
+    results=pd.DataFrame(arr, columns=cols)
+    log.info("DF = {}".format(results))
+    return(results)
+
 def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     """
     Checks the existence of the specified resolution of imagery. Returns a True-value with a warning if passed
@@ -161,8 +256,37 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
     -------
     result : int
        1 if imagery is valid, 0 if not and 2 if an invalid .SAFE file
-
     """
+
+    log = logging.getLogger("pyeo")
+
+    if not os.path.exists(l2_SAFE_file):
+        log.info("{} does not exist.".format(l2_SAFE_file))
+        return 2
+
+    if not l2_SAFE_file.endswith(".SAFE") or "L2A" not in l2_SAFE_file:
+        log.info("{} does not exist.".format(l2_SAFE_file))
+        return 2
+    log.info("Checking {} for incomplete {} imagery".format(l2_SAFE_file, resolution))
+
+    bands=["B08","B04","B03","B02"]
+    nb=0
+    for band in bands:
+        f = get_filenames(l2_SAFE_file, band, "")
+        f = [filename for filename in f if ('.jp2' in filename) and (resolution in filename)]
+        if len(f) > 0:
+            for i in range(len(f)):
+                log.info("   {}".format(f[i]))
+            nb=nb+1
+        else:
+            log.warning("Band file not found for band: {}".format(band))
+    if nb == len(bands):
+        log.info("All necessary bands have been found")
+        return 1
+    else:
+        log.warning("Not all necessary bands have been found in the SAFE directory")
+        log.warning("n bands = {}".format(nb))
+        return 0
 
     """
     # NOT USED
@@ -177,32 +301,6 @@ def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
             if name in dirs:
                 return os.path.join(root, name)
     """
-
-    log = logging.getLogger("pyeo")
-
-    if not l2_SAFE_file.endswith(".SAFE") or "L2A" not in l2_SAFE_file:
-        log.info("{} does not exist.".format(l2_SAFE_file))
-        return 2
-    log.info("Checking {} for incomplete {} imagery".format(l2_SAFE_file, resolution))
-
-    bands=["B08","B04","B03","B02"]
-    nb=0
-    for band in bands:
-        f=get_filenames(l2_SAFE_file, band+".jp2", "")
-        if len(f) > 0:
-            log.info("Found file(s):")
-            for i in range(len(f)):
-                log.info("   {}".format(f[i]))
-            nb=nb+1
-        else:
-            log.warning("Band file not found for band: {}".format(band))
-    if nb == len(bands):
-        log.info("All necessary bands have been found")
-        return 1
-    else:
-        log.warning("Not all necessary bands have been found in the SAFE directory")
-        log.warning("n bands = {}".format(nb))
-        return 0
 
     '''
     # check whether the band rasters are in the IMG_DATA/R10 or similar subdirectory
@@ -247,6 +345,9 @@ def check_for_invalid_l1_data(l1_SAFE_file):
     result : int
         1 if imagery is valid, 0 if not and 2 if not a safe-file
     """
+    if not os.path.exists(l1_SAFE_file):
+        log.info("{} does not exist.".format(l1_SAFE_file))
+        return 2
     if not l1_SAFE_file.endswith(".SAFE") or "L1C" not in l1_SAFE_file:
         log.info("{} does not exist.".format(l1_SAFE_file))
         return 2

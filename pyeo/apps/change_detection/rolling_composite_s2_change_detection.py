@@ -34,6 +34,7 @@ import pyeo.filesystem_utilities
 
 
 import configparser
+import copy
 import argparse
 import os
 from osgeo import gdal
@@ -127,29 +128,40 @@ def rolling_detection(config_path,
             log.info("------------------------------------------")
             log.info("Building image composite")
             if do_download or download_l2_data or do_all:
-                log.info("Searching for images for initial composite between {} and {} with cloud cover <= {}".format(
-                    composite_start_date, composite_end_date, cloud_cover))
-                composite_products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
-                                                                                          composite_start_date,
-                                                                                          composite_end_date,
-                                                                                          conf, 
-                                                                                          cloud_cover=cloud_cover,
-                                                                                          tile_id=tile_id)
+                log.info("Searching for images for initial composite.")
+                composite_products_all = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
+                                                                                              composite_start_date,
+                                                                                              composite_end_date,
+                                                                                              conf, 
+                                                                                              cloud_cover=cloud_cover,
+                                                                                              tile_id=tile_id)
+                log.info("--> Found {} L1C or L2A products for the composite.".format(len(composite_products_all)))
+
                 if download_l2_data:
                     log.info("Restricting query results to include only matching L1C and L2A products.")
-                    composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products)
-                    log.info("{} matching products with both L1C and L2A remain.".format(len(composite_products)))
-                    log.info("Downloading matching Sentinel-2 L1C and L2A products.")
-                    pyeo.queries_and_downloads.download_s2_data(composite_products, 
-                                                                composite_l1_image_dir, 
-                                                                composite_l2_image_dir, 
-                                                                download_source,
-                                                                user=sen_user, 
-                                                                passwd=sen_pass, 
-                                                                try_scihub_on_fail=True)
-                else:
-                    log.info("Restricting query results to L1C products only.")
+                    composite_products = pyeo.queries_and_downloads.filter_non_matching_s2_data(composite_products_all)
+                    log.info("--> Found {} L2A products for the composite.".format(len(composite_products)))
+                    if len(composite_products) > 0:
+                        log.info("{} matching products with both L1C and L2A remain.".format(len(composite_products)))
+                        log.info("Downloading only matching Sentinel-2 L1C and L2A products.")
+                        pyeo.queries_and_downloads.download_s2_data(composite_products, 
+                                                                    composite_l1_image_dir, 
+                                                                    composite_l2_image_dir, 
+                                                                    download_source,
+                                                                    user=sen_user, 
+                                                                    passwd=sen_pass, 
+                                                                    try_scihub_on_fail=True)
+                    else: # download L1C if no L2A data are found
+                        do_download = True
+                        download_l2_data = False 
+                        composite_products = copy.deepcopy(composite_products_all) 
+                if (do_download or do_all) and not download_l2_data:
+                    log.info("Searching for L1C products only.")
                     composite_products = pyeo.queries_and_downloads.filter_to_l1_data(composite_products)
+                    log.info("--> Found {} L1C products for the composite.".format(len(composite_products)))
+                    if len(composite_products) > 0:
+                        log.error("Found no L1C data that match the search criteria.")
+                    log.info("Downloading L1C products for the composite.")
                     pyeo.queries_and_downloads.download_s2_data(composite_products, 
                                                                 composite_l1_image_dir,
                                                                 composite_l2_image_dir,
@@ -162,7 +174,6 @@ def rolling_detection(config_path,
                                                                     composite_l2_image_dir,
                                                                     sen2cor_path,
                                                                     delete_unprocessed_image=False)
-            if do_merge or do_all:
                 log.info("Merging raster bands into single files for each image")
                 pyeo.raster_manipulation.preprocess_sen2_images(composite_l2_image_dir, 
                                                                 composite_merged_dir,
@@ -175,11 +186,14 @@ def rolling_detection(config_path,
             pyeo.raster_manipulation.clever_composite_directory(composite_merged_dir, 
                                                                 composite_dir, 
                                                                 chunks=30,
-                                                                generate_date_images=True)
+                                                                generate_date_images=True,
+                                                                missing_data_value=0)
 
         else:
             # If build_composite is not set, query and download all images since the last composite was created or updated
             if do_download or download_l2_data or do_all:
+                log.info("Searching for images for change detection between {} and {} with cloud cover <= {}".format(
+                    start_date, end_date, cloud_cover))
                 products = pyeo.queries_and_downloads.check_for_s2_data_by_date(aoi_path,
                                                                                 start_date, 
                                                                                 end_date, 
@@ -189,7 +203,7 @@ def rolling_detection(config_path,
                 if download_l2_data:  
                     log.info("Restricting query results to include only matching L1C and L2A products.")
                     products = pyeo.queries_and_downloads.filter_non_matching_s2_data(products)
-                    log.info("{} products remain".format(len(products)))
+                    log.info("{} L2A products remain".format(len(products)))
                     log.info("Downloading selected products.")
                     pyeo.queries_and_downloads.download_s2_data(products, 
                                                                 l1_image_dir, 
@@ -215,7 +229,7 @@ def rolling_detection(config_path,
                                                                     sen2cor_path,
                                                                     delete_unprocessed_image=False)
 
-            # Aggregating single band raster files into a single Geotiff file
+            # Aggregate single band raster files for the change detection into a single Geotiff files
             if do_merge or do_all:
                 log.info("Merging all band files into a Geotiff file for each granule")
                 pyeo.raster_manipulation.preprocess_sen2_images(l2_image_dir, 
@@ -225,61 +239,65 @@ def rolling_detection(config_path,
                                                                 epsg=epsg,
                                                                 buffer_size=10)
 
-        # Irrespective of whether build_composite is selected, stack pairs of consecutive images into a single file
-        if do_stack or do_all:
-            log.info("Stacking pairs of consecutive images into single files")
-            log.info("Finding most recent image composite")
-            try:
-                latest_composite_name = \
-                    pyeo.filesystem_utilities.sort_by_timestamp(
-                        [image_name for image_name in os.listdir(composite_dir) if image_name.endswith(".tif")],
-                        recent_first=True
-                    )[0]
-                latest_composite_path = os.path.join(composite_dir, latest_composite_name)
-                log.info("Most recent composite at {}".format(latest_composite_path))
-            except IndexError:
-                log.critical("Latest composite not found. The first time you run this script, you need to include the "
-                             "--build-composite flag to create a base composite to work off. If you have already done this,"
-                             "check that the earliest dated image in your images/merged folder is later than the earliest"
-                             " dated image in your composite/ folder.")
-                sys.exit(1)
-
-            log.info("Sorting image list")
-            images = \
-                pyeo.filesystem_utilities.sort_by_timestamp(
-                    [image_name for image_name in os.listdir(merged_image_dir) if image_name.endswith(".tif")],
-                    recent_first=False
-                )
-            if not images:
-                raise FileNotFoundError("No images found in {}. Did your preprocessing complete?".format(merged_image_dir))
-            log.info("Images to process: {}".format(images))
-
-            for image in images:
-                new_image_path = os.path.join(merged_image_dir, image)
-                # Stack with preceding composite
+            # Stack pairs of consecutive images for change detection into single files
+            if do_stack or do_all:
+                log.info("Stacking pairs of consecutive images into single files")
+                log.info("Finding most recent image composite")
                 try:
-                    latest_composite_path = pyeo.filesystem_utilities.get_preceding_image_path(new_image_path,
-                                                                                               composite_dir)
-                except FileNotFoundError:
-                    log.warning("No preceding composite found for {}, skipping.".format(new_image_path))
-                    continue
-                log.info("Stacking image {} with latest available composite {} with bands from both dates".format(new_image_path, latest_composite_path))
-                log.info("New stacked image will be created at {}".format(new_image_path))
-                new_stack_path = pyeo.raster_manipulation.stack_image_with_composite(new_image_path,
-                                                                                     latest_composite_path,
-                                                                                     stacked_image_dir,
-                                                                                     invert_stack=flip_stacks)
+                    latest_composite_name = \
+                        pyeo.filesystem_utilities.sort_by_timestamp(
+                            [image_name for image_name in os.listdir(composite_dir) if image_name.endswith(".tif")],
+                            recent_first=True
+                        )[0]
+                    latest_composite_path = os.path.join(composite_dir, latest_composite_name)
+                    log.info("Most recent composite at {}".format(latest_composite_path))
+                except IndexError:
+                    log.critical("Latest composite not found. The first time you run this script, you need to include the "
+                                 "--build-composite flag to create a base composite to work off. If you have already done this,"
+                                 "check that the earliest dated image in your images/merged folder is later than the earliest"
+                                 " dated image in your composite/ folder.")
+                    sys.exit(1)
 
+                log.info("Sorting image list")
+                images = \
+                    pyeo.filesystem_utilities.sort_by_timestamp(
+                        [image_name for image_name in os.listdir(merged_image_dir) if image_name.endswith(".tif")],
+                        recent_first=False
+                    )
+                if not images:
+                    raise FileNotFoundError("No images found in {}. Did your preprocessing complete?".format(merged_image_dir))
+                log.info("Images to process: {}".format(images))
+
+                for image in images:
+                    new_image_path = os.path.join(merged_image_dir, image)
+                    # Stack with preceding composite
+                    try:
+                        latest_composite_path = pyeo.filesystem_utilities.get_preceding_image_path(new_image_path,
+                                                                                               composite_dir)
+                    except FileNotFoundError:
+                        log.warning("No preceding composite found for {}, skipping.".format(new_image_path))
+                        continue
+                    log.info("Stacking image {} with latest available composite {} with bands from both dates".format(new_image_path, latest_composite_path))
+                    log.info("New stacked image will be created at {}".format(new_image_path))
+                    new_stack_path = pyeo.raster_manipulation.stack_image_with_composite(new_image_path,
+                                                                                         latest_composite_path,
+                                                                                         stacked_image_dir,
+                                                                                         invert_stack=flip_stacks)
+
+        '''
         # Mosaic stacked layers
         if do_mosaic or do_all:
             log.info("Mosaicking stacked multitemporal images across tiles")
             pyeo.raster_manipulation.mosaic_images(stacked_image_dir, mosaic_image_dir, format="GTiff", 
                                                    datatype=gdal.GDT_Int32, nodata=0)
+        '''
 
         # Classify images stacked with composite
         if do_classify or do_all:
-            # Apply a mask of pixels to be classified to all images in the directory
+            log.info("do_all={}".format(do_all))
+            log.info("do_mask={}".format(do_mask))
             if do_mask or do_all:
+            # Apply a mask of pixels to be classified to all images in the directory
                 log.info("Applying the specified mask of pixels to be classified")
                 log.info("Stacked image dir: {}".format(stacked_image_dir))
                 log.info("Mask file: {}".format(mask_path))

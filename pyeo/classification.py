@@ -249,6 +249,174 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
         return class_out_path
 
 
+def classify_image_and_composite(image_path, composite_path, model_path, class_out_path, prob_out_path=None,
+                   apply_mask=False, out_type="GTiff", num_chunks=10, nodata=0, skip_existing = False):
+    """
+    Produces a class map from a raster file, a composite raster file and a model.
+    This applies the model's fit() function to each pixel in the input raster, and saves the result into an output
+    raster. The model is presumed to be a scikit-learn fitted model created using one of the other functions in this
+    library (:py:func:`create_model_from_signatures` or :py:func:`create_trained_model`).
+
+    Parameters
+    ----------
+    image_path : str
+        The path to the raster image to be classified.
+    composite_path : str
+        The path to the raster image composite to be used as a baseline.
+    model_path : str
+        The path to the .pkl file containing the model
+    class_out_path : str
+        The path that the classified map will be saved at.
+    prob_out_path : str, optional
+        If present, the path that the class probability map will be stored at. Default None
+    apply_mask : bool, optional
+        If True, uses the .msk file corresponding to the image at image_path to skip any invalid pixels. Default False.
+    out_type : str, optional
+        The raster format of the class image. Defaults to "GTiff" (geotif). See gdal docs for valid types.
+    num_chunks : int, optional
+        The number of chunks the image is broken into prior to classification. The smaller this number, the faster
+        classification will run - but the more likely you are to get a outofmemory error. Default 10.
+    nodata : int, optional
+        The value to write to masked pixels. Defaults to 0.
+    skip_existing : bool, optional
+        If true, do not run if class_out_path already exists. Defaults to False.
+
+
+    Notes
+    -----
+    If you want to create a custom model, the object is presumed to have the following methods and attributes:
+
+       - model.n_classes_ : the number of classes the model will produce
+       - model.n_cores : The number of CPU cores used to run the model
+       - model.predict() : A function that will take a set of band inputs from a pixel and produce a class.
+       - model.predict_proba() : If called with prob_out_path, a function that takes a set of n band inputs from a pixel
+                                and produces n_classes_ outputs corresponding to the probabilties of a given pixel being
+                                that class
+
+    """
+    if skip_existing:
+        log.info("Checking for existing classification {}".format(class_out_path))
+        if os.path.isfile(class_out_path):
+            log.info("Class image exists, skipping.")
+            return class_out_path
+    log.info("Classifying file: {}".format(image_path))
+    log.info("Saved model     : {}".format(model_path))
+    image = gdal.Open(image_path)
+    composite = gdal.Open(composite_path)
+    if num_chunks == None:
+        log.info("No chunk size given, attempting autochunk.")
+        num_chunks = autochunk(image)
+        log.info("Autochunk to {} chunks".format(num_chunks))
+    try:
+        model = sklearn_joblib.load(model_path)
+    except KeyError:
+        log.warning("Sklearn joblib import failed,trying generic joblib")
+        model = joblib.load(model_path)
+    except TypeError:
+        log.warning("Sklearn joblib import failed,trying generic joblib")
+        model = joblib.load(model_path)
+    class_out_image = create_matching_dataset(image, class_out_path, format=out_type, datatype=gdal.GDT_Byte)
+    log.info("Created classification image file: {}".format(class_out_path))
+    if prob_out_path:
+        try:
+            log.info("n classes in the model: {}".format(model.n_classes_))
+        except AttributeError:
+            log.warning("Model has no n_classes_ attribute (known issue with GridSearch)")
+        prob_out_image = create_matching_dataset(image, prob_out_path, bands=model.n_classes_, datatype=gdal.GDT_Float32)
+        log.info("Created probability image file: {}".format(prob_out_path))
+    model.n_cores = -1
+    image_array = image.GetVirtualMemArray()
+    composite_array = composite.GetVirtualMemArray()
+
+    if apply_mask:
+        mask_path = get_mask_path(image_path)
+        log.info("Applying mask at {}".format(mask_path))
+        mask = gdal.Open(mask_path)
+        mask_array = mask.GetVirtualMemArray()
+        image_array = apply_array_image_mask(image_array, mask_array)
+        mask_array = None
+        mask = None
+
+    # Mask out missing values from the classification
+    # at this point, image_array has dimensions [band, y, x]
+    image_array = reshape_raster_for_ml(image_array)
+    composite_array = reshape_raster_for_ml(composite_array)
+    # Now it has dimensions [x * y, band] as needed for Scikit-Learn
+
+    # Determine where in the image array there are no missing values in any of the bands (axis 1)
+    n_samples = image_array.shape[0]  # gives x * y dimension of the whole image
+    good_mask = np.all(image_array != nodata, axis=1)
+    good_sample_count = np.count_nonzero(good_mask)
+    log.info("No. good values: {}".format(good_sample_count))
+    #if good_sample_count <= 0.5*len(good_mask):  # If the images is less than 50% good pixels, do filtering
+    if 1 == 0:  # Removing the filter until we fix the classification issue with it
+        log.info("Filtering nodata values")
+        good_indices = np.nonzero(good_mask)
+        good_samples = np.take(image_array, good_indices, axis=0).squeeze()
+        n_good_samples = len(good_samples)
+    else:
+        #log.info("Not worth filtering nodata, skipping.")
+        #TODO: check that the concatenation is done over the correct axis
+        good_samples = np.concatenate((composite_array, image_array), axis=1)
+        good_indices = range(0, n_samples)
+        n_good_samples = n_samples
+    classes = np.full(n_good_samples, nodata, dtype=np.ubyte)
+    if prob_out_path:
+        probs = np.full((n_good_samples, model.n_classes_), nodata, dtype=np.float32)
+
+    chunk_size = int(n_good_samples / num_chunks)
+    chunk_resid = n_good_samples - (chunk_size * num_chunks)
+    log.info("   Number of chunks {} Chunk size {} Chunk residual {}".format(num_chunks, chunk_size, chunk_resid))
+    # The chunks iterate over all values in the array [x * y, bands] always with 8 bands per chunk
+    for chunk_id in range(num_chunks):
+        offset = chunk_id * chunk_size
+        # process the residual pixels with the last chunk
+        if chunk_id == num_chunks - 1:
+            chunk_size = chunk_size + chunk_resid
+        log.info("   Classifying chunk {} of size {}".format(chunk_id, chunk_size))
+        chunk_view = good_samples[offset : offset + chunk_size]
+        #indices_view = good_indices[offset : offset + chunk_size]
+        log.info("   Creating out_view")
+        out_view = classes[offset : offset + chunk_size]  # dimensions [chunk_size]
+        log.info("   Calling model.predict")
+        chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
+        out_view[:] = model.predict(chunk_view)
+
+        if prob_out_path:
+            log.info("   Calculating probabilities")
+            prob_view = probs[offset : offset + chunk_size, :]
+            prob_view[:, :] = model.predict_proba(chunk_view)
+
+    log.info("   Creating class array of size {}".format(n_samples))
+    class_out_array = np.full((n_samples), nodata)
+    for i, class_val in zip(good_indices, classes):
+        class_out_array[i] = class_val
+
+    log.info("   Creating GDAL class image")
+    class_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :] = \
+        reshape_ml_out_to_raster(class_out_array, image.RasterXSize, image.RasterYSize)
+
+    if prob_out_path:
+        log.info("   Creating probability array of size {}".format(n_samples * model.n_classes_))
+        prob_out_array = np.full((n_samples, model.n_classes_), nodata)
+        for i, prob_val in zip(good_indices, probs):
+            prob_out_array[i] = prob_val
+        log.info("   Creating GDAL probability image")
+        log.info("   N Classes = {}".format(prob_out_array.shape[1]))
+        log.info("   Image X size = {}".format(image.RasterXSize))
+        log.info("   Image Y size = {}".format(image.RasterYSize))
+        prob_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :, :] = \
+            reshape_prob_out_to_raster(prob_out_array, image.RasterXSize, image.RasterYSize)
+
+    class_out_image = None
+    prob_out_image = None
+    if prob_out_path:
+        return class_out_path, prob_out_path
+    else:
+        return class_out_path
+
+
+
 def autochunk(dataset, mem_limit=None):
     """
     :meta private:

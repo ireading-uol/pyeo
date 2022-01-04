@@ -141,7 +141,7 @@ from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from
 from pyeo.array_utilities import project_array
 from pyeo.filesystem_utilities import sort_by_timestamp, get_sen_2_tiles, get_l1_safe_file, get_sen_2_image_timestamp, \
     get_sen_2_image_tile, get_sen_2_granule_id, check_for_invalid_l2_data, get_mask_path, get_sen_2_baseline, \
-    get_safe_product_type, get_change_detection_dates, get_filenames
+    get_safe_product_type, get_change_detection_dates, get_filenames, get_raster_paths
 from pyeo.exceptions import CreateNewStacksException, StackImagesException, BadS2Exception, NonSquarePixelException
 
 log = logging.getLogger("pyeo")
@@ -374,8 +374,6 @@ def stack_images(raster_paths, out_raster_path,
     """
     #TODO: Confirm the union works, and confirm that nondata defaults to 0.
     log.info("Merging band rasters into a single file:")
-    for path in raster_paths:
-        log.info("   "+path)
     if len(raster_paths) <= 1:
         raise StackImagesException("stack_images requires at least two input images")
     rasters = [gdal.Open(raster_path) for raster_path in raster_paths]
@@ -395,7 +393,7 @@ def stack_images(raster_paths, out_raster_path,
     out_raster_array[...] = nodata_value
     present_layer = 0
     for i, in_raster in enumerate(rasters):
-        log.info("Merging band image {}".format(i+1))
+        log.info("  Merging raster file: {}".format(raster_paths[i]))
         in_raster_array = in_raster.GetVirtualMemArray()
         out_x_min, out_x_max, out_y_min, out_y_max = pixel_bounds_from_polygon(out_raster, combined_polygons)
         in_x_min, in_x_max, in_y_min, in_y_max = pixel_bounds_from_polygon(in_raster, combined_polygons)
@@ -632,7 +630,7 @@ def mosaic_images(raster_path, out_raster_path, format="GTiff", datatype=gdal.GD
         for i, dt in enumerate(date_time):
             dt_str.append(dt.strftime("%Y%m%d%H%M%S"))
             if i > 1:
-                log.info("WARNING: More than two acquisition dates / times found in raster file name: {}".format(raster_file))
+                log.warning("More than two acquisition dates / times found in raster file name: {}".format(raster_file))
             log.info("File {} contains imagery from acquisition date / time of {}".format(raster_file, dt.strftime("%Y%m%d%H%M%S")))
     dt_str = sorted(dt_str)
     dt_min = dt_str[0]
@@ -889,10 +887,10 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
                 ys = chunksize
             else:
                 ys = ysize - ch * chunksize
-            log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
+            #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
             res = [] # reset the stack of band rasters from all time slices
             for f in in_raster_path_list:
-                log.info("Opening raster {}".format(f)) 
+                #log.info("Opening raster {}".format(f)) 
                 ds = gdal.Open(f)
                 b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
                 res.append(b)
@@ -904,13 +902,12 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             # catch pixels where all rasters have NaN values and set them to missing_data_value
             all_nan_locations = np.isnan(stacked).all(axis=-1)
             median_raster[all_nan_locations] = missing_data_value
-            #TODO: check whether this works - writing to the correct position in the raster
             b = result.GetRasterBand(1).ReadAsArray()
             log.info("Broadcasting from [{}:{}, {}:{}]".format(0, median_raster.shape[0], 0, median_raster.shape[1]))
-            log.info("Broadcasting into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
+            log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
             b[yoff:(yoff+ys), xoff:(xoff+xs)] = median_raster
             result.GetRasterBand(1).WriteArray(b)
-        result = None        
+        result = None    
         res = None
         b = None
         median_raster = None
@@ -930,17 +927,17 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
     # Creating output image + array
     log.info("-------------------------------------------------")
     log.info("Creating median composite at {}".format(composite_out_path))
-    #log.info("Using {} input raster files:".format(len(in_raster_path_list)))
-    #for i in in_raster_path_list:
-    #    log.info("   {}".format(i))
+    log.info("Using {} input raster files:".format(len(in_raster_path_list)))
+    for i in in_raster_path_list:
+        log.info("   {}".format(i))
 
     mask_paths = []
     for i, in_raster in enumerate(in_raster_path_list):
         mask_paths.append(get_mask_path(in_raster_path_list[i]))
     mask_paths = [f for f in mask_paths if "_masked" not in f] #remove already masked tiff files to avoid double-processing
-    #log.info("Mask paths for input raster files:")
-    #for i in mask_paths:
-    #    log.info("   {}".format(i))
+    log.info("Mask paths for input raster files:")
+    for i in mask_paths:
+        log.info("   {}".format(i))
 
     # apply mask to each raster file
     masked_image_paths = []
@@ -961,10 +958,9 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             log.info('Finished application of masks to rasters.')
 
     # use raster stacking to calculate the median over all masked raster files and all 4 bands
-    #TODO: get number of bands from first raster file
     log.info('Beginning median calculations.')
     tmpfiles = []
-    for band in range(4):
+    for band in range(nbands):
         log.info('Band {} - calculating median composite across all images using raster stacking'.format(band+1))
         log.info('   Ignoring missing data value of {}'.format(missing_data_value))
         tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
@@ -1095,7 +1091,7 @@ def composite_directory(image_dir, composite_out_dir, format="GTiff", generate_d
     composite_images_with_mask(sorted_image_paths, composite_out_path, format, generate_date_image=generate_date_images)
     return composite_out_path
 
-def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chunks=10, generate_date_images=False):
+def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chunks=10, generate_date_images=False, missing_data_value=0):
     """
     Using composite_images_with_mask, creates a composite containing every image in image_dir. This will
       place a file named composite_[last image date].tif inside composite_out_dir
@@ -1111,6 +1107,8 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chu
     generate_date_images : bool, optional
         If true, generates a corresponding date image for the composite. See docs for composite_images_with_mask.
         Defaults to False.
+    missing_data_value : int, optional
+        Value for no data encoding, will be ignored in calculating the median
 
     Returns
     -------
@@ -1133,7 +1131,8 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chu
         log.info("Image number {} has time stamp {}".format(i+1, timestamp))
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
     composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
-    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, chunks=chunks, generate_date_image=generate_date_images)
+    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, chunks=chunks, 
+                                      generate_date_image=generate_date_images, missing_data_value=missing_data_value)
     return composite_out_path
 
 def flatten_probability_image(prob_image, out_path):
@@ -1207,7 +1206,7 @@ def stack_and_trim_images(old_image_path, new_image_path, aoi_path, out_image):
     """
     log = logging.getLogger(__name__)
     if os.path.exists(out_image):
-        log.warning("{} exists, skipping.")
+        log.info("{} exists, skipping.")
         return
     with TemporaryDirectory(dir=os.getcwd()) as td:
         #log.info("Making temp dir {}".format(td))
@@ -1833,7 +1832,7 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
             log.info("Output file containing all bands: {}".format(out_path))
             
             if os.path.exists(out_path):
-                log.info("WARNING: Output file already exists. Skipping the band merging step.")
+                log.info("Output file already exists. Skipping the band merging step.")
             else:
                 stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
 
@@ -1862,6 +1861,54 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
                     if l1_safe_file:
                         shutil.move(mask_path, out_mask_path)
                         resample_image_in_place(out_mask_path, out_resolution)
+
+def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B02", "B03", "B04", "B08"], out_resolution=10):
+    """
+    For every .SAFE folder in l2_dir, creates a cloud-masked raster band for each selected band
+    based on the SCL layer.
+
+    Parameters
+    ----------
+    l2_dir : str
+        The directory containing a set of L2 .SAFE folders to preprocess
+    out_dir : str
+        The directory to store the preprocessed files
+    scl_classes : list of int
+        values of classes to be masked out
+    buffer_size : int, optional
+        The buffer to apply to the sen2cor mask - defaults to 0
+    bands : list of str, optional
+        List of names of bands to include in the final rasters. Defaults to ("B02", "B03", "B04", "B08")
+    out_resolution : number, optional
+        Resolution to resample every image to - units are defined by the image projection. Default is 10.
+
+    """
+    safe_file_path_list = [os.path.join(l2_dir, safe_file_path)
+                           for safe_file_path
+                           in os.listdir(l2_dir)
+                           if safe_file_path.endswith(".SAFE")]
+    for l2_safe_file in safe_file_path_list:
+        log.info("  L2A raster file: {}".format(l2_safe_file))
+        f = get_sen_2_granule_id(l2_safe_file)
+        pattern = f.split("_")[0]+"_"+f.split("_")[1]+"_"+f.split("_")[2]+"_"+f.split("_")[3]+"_"+f.split("_")[4]+f.split("_")[5]
+        log.info("  Granule ID  : {}".format(f))
+        log.info("  File pattern: {}".format(pattern))
+        df = get_raster_paths([out_dir], filepatterns=[pattern], dirpattern="")
+        if len(df)>0:
+            log.info("  Skipping band merging for: {}".format(f))
+            for i in range(len(df)):
+                log.info("  Found stacked file: {}".format(df[pattern][i][0]))
+        else:
+            with TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+                #raster_paths = get_raster_paths([l2_safe_file], filepatterns=bands, dirpattern="R10m")
+                temp_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + ".tif"
+                out_path = os.path.join(out_dir, os.path.basename(temp_file))
+                stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
+                mask_path = get_mask_path(temp_file)
+                create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
+                apply_mask_to_image(mask_path, temp_file, out_path)
+                #shutil.move(temp_file, out_path)
+                resample_image_in_place(out_path, out_resolution)
 
 
 def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, bands_to_stack=("B2","B3","B4")):
@@ -2144,18 +2191,18 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
     # added sen2cor_path by hb91
     gipp_path = os.path.join(os.path.dirname(__file__), "L2A_GIPP.xml")
     out_dir = os.path.dirname(image_path)
-    log.info("calling sen2cor subprocess command:")
-    log.info(sen2cor_path + " " + image_path + " --output_dir " + os.path.dirname(image_path))
-    #log.info(sen2cor_path + " " + image_path + " --output_dir " + os.path.dirname(image_path) + " --GIP_L2A " + gipp_path)
     now_time = datetime.datetime.now()   # I can't think of a better way of getting the new outpath from sen2cor
     timestamp = now_time.strftime(r"%Y%m%dT%H%M%S")
     version = get_sen2cor_version(sen2cor_path)
     out_path = build_sen2cor_output_path(image_path, timestamp, version)
     # The application of sen2cor below with the option --GIP_L2A caused an unspecified metadata error in the xml file.
     # Removing it resolves this problem.
+    log.info("calling sen2cor:")
+    log.info(sen2cor_path + " " + image_path + " --output_dir " + out_path)
     sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', out_path],
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     universal_newlines=True)
+    #log.info(sen2cor_path + " " + image_path + " --output_dir " + os.path.dirname(image_path) + " --GIP_L2A " + gipp_path)
     #sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', os.path.dirname(image_path),
     #                                 '--GIP_L2A', gipp_path],
     #                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -2172,12 +2219,12 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
             raise subprocess.CalledProcessError(-1, "L2A_Process")
 
     log.info("sen2cor processing finished for {}".format(image_path))
-    log.info("Checking for presence of band raster files.")
+    log.info("Checking for presence of band raster files in {}".format(out_path))
     if not check_for_invalid_l2_data(out_path):
         log.error("10m imagery not present in {}".format(out_path))
         raise BadS2Exception
     if delete_unprocessed_image:
-        log.info("removing {}".format(image_path))
+        log.info("Removing {}".format(image_path))
         shutil.rmtree(image_path)
     return out_path
 
@@ -2269,22 +2316,21 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
     # Opportunity for multithreading here
     for image in images:
         log.info("Atmospheric correction of {}".format(image))
-        log.info("   sen2cor path = " + sen2cor_path)
+        #log.info("   sen2cor path = " + sen2cor_path)
         image_path = os.path.join(in_directory, image)
-        log.info("   image path = " + image_path)
+        #log.info("   image path = " + image_path)
         # update the product discriminator part of the output file name
         # see https://sentinels.copernicus.eu/web/sentinel/user-guides/sentinel-2-msi/naming-convention
         image_timestamp = datetime.datetime.now().strftime(r"%Y%m%dT%H%M%S")
-        log.info("   sen2cor processing time stamp = " + image_timestamp)
+        #log.info("   sen2cor processing time stamp = " + image_timestamp)
         out_name = build_sen2cor_output_path(image, image_timestamp, get_sen2cor_version(sen2cor_path))
-        log.info("   out name = " + out_name)
+        #log.info("   out name = " + out_name)
         out_path = os.path.join(out_directory, out_name)
-        log.info("   out path = " + out_path)
+        #log.info("   out path = " + out_path)
         out_glob = out_path.rpartition("_")[0] + "*"
-        #TODO: remove now timestamp from glob
-        log.info("   out glob = " + out_glob)
+        #log.info("   out glob = " + out_glob)
         if glob.glob(out_glob):
-            log.warning("{} exists. Skipping atmospheric correction.".format(out_path))
+            log.info("  Skipping atmospheric correction. File exists at {}".format(out_path))
             continue
         try:
             l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
@@ -2293,8 +2339,8 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
             pass
         else:
             l2_name = os.path.basename(l2_path)
-            log.info("Changing L2A path: {}".format(l2_path))
-            log.info("to new L2A   path: {}".format(os.path.join(out_directory, l2_name)))
+            #log.info("Changing L2A path: {}".format(l2_path))
+            #log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
             os.rename(l2_path, os.path.join(out_directory, l2_name))
 
 
@@ -2403,7 +2449,7 @@ def create_mask_from_confidence_layer(l2_safe_path, out_path, cloud_conf_thresho
     log.info("Mask created at {}".format(out_path))
     return out_path
 
-def create_mask_from_scl_layer(l2_safe_path, out_path, scl_class, buffer_size=0):
+def create_mask_from_scl_layer(l2_safe_path, out_path, scl_classes, buffer_size=0):
     """
     Creates a multiplicative binary mask where pixels of class scl_class are set to 0 and 
     other pixels are 1.
@@ -2414,10 +2460,24 @@ def create_mask_from_scl_layer(l2_safe_path, out_path, scl_class, buffer_size=0)
         Path to the L1
     out_path : str
         Path to the new path
-    scl_class: int
-        Class value of the SCL scene classification layer to be set to 0 
+    scl_classes: list of int
+        Class values of the SCL scene classification layer to be set to 0 
     buffer_size : int, optional
         The size of the buffer to apply around the masked out pixels (dilation)
+
+    Label    Classification
+      0    NO_DATA
+      1    SATURATED_OR_DEFECTIVE
+      2    DARK_AREA_PIXELS
+      3    CLOUD_SHADOWS
+      4    VEGETATION
+      5    NOT_VEGETATED
+      6    WATER
+      7    UNCLASSIFIED
+      8    CLOUD_MEDIUM_PROBABILITY
+      9    CLOUD_HIGH_PROBABILITY
+     10    THIN_CIRRUS
+     11    SNOW
 
     Returns
     -------
@@ -2426,25 +2486,27 @@ def create_mask_from_scl_layer(l2_safe_path, out_path, scl_class, buffer_size=0)
 
     """
     log = logging.getLogger(__name__)
-    log.info("Creating scene classification mask for {} with SCL class {}".format(l2_safe_path, scl_class))
+    log.info("Creating scene classification mask for {} with SCL classes {}".format(l2_safe_path, scl_classes))
     scl_glob = "GRANULE/*/IMG_DATA/R20m/*SCL*_20m.jp2"  # This should match both old and new mask formats
-    log.warn(" SCL glob = {}".format(scl_glob))
-    scl_path = glob.glob(os.path.join(l2_safe_path, scl_glob))[0]
-    log.warn(" SCL path = {}".format(scl_path))
+    df = get_raster_paths([l2_safe_path], filepatterns=["SCL"], dirpattern="R20m")
+    #log.info(df.columns)
+    #log.info(len(df))
+    scl_path = df["SCL"][0][0]
+    #scl_path = glob.glob(os.path.join(l2_safe_path, scl_glob))[0]
+    log.info("  Opening SCL image: {}".format(scl_path))
     scl_image = gdal.Open(scl_path)
     scl_array = scl_image.GetVirtualMemArray()
-    mask_array = np.isin(scl_array, (scl_class))
-
+    mask_array = np.isin(scl_array, (scl_classes))
     mask_image = create_matching_dataset(scl_image, out_path)
     mask_image_array = mask_image.GetVirtualMemArray(eAccess=gdal.GF_Write)
     np.copyto(mask_image_array, mask_array)
     mask_image_array = None
     scl_image = None
     mask_image = None
+    log.info("Resampling image in place")
     resample_image_in_place(out_path, 10)
     if buffer_size:
         buffer_mask_in_place(out_path, buffer_size)
-    log.info("Mask created at {}".format(out_path))
     return out_path
 
 
