@@ -2089,21 +2089,20 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
         log.info("  Granule ID  : {}".format(f))
         log.info("  File pattern: {}".format(pattern))
         df = get_raster_paths([out_dir], filepatterns=[pattern], dirpattern="")
-        if len(df)>0:
-            log.info("  Skipping band merging for: {}".format(f))
-            for i in range(len(df)):
+        for i in range(len(df)):
+            if df[pattern][i] != "":
+                log.info("  Skipping band merging for: {}".format(f))
                 log.info("  Found stacked file: {}".format(df[pattern][i][0]))
-        else:
-            with TemporaryDirectory(dir=os.getcwd()) as temp_dir:
-                #raster_paths = get_raster_paths([l2_safe_file], filepatterns=bands, dirpattern="R10m")
-                temp_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + ".tif"
-                out_path = os.path.join(out_dir, os.path.basename(temp_file))
-                stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
-                mask_path = get_mask_path(temp_file)
-                create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
-                apply_mask_to_image(mask_path, temp_file, out_path)
-                #shutil.move(temp_file, out_path)
-                resample_image_in_place(out_path, out_resolution)
+            else:
+                with TemporaryDirectory(dir=os.getcwd()) as temp_dir:
+                    temp_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + ".tif"
+                    out_path = os.path.join(out_dir, os.path.basename(temp_file))
+                    stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
+                    mask_path = get_mask_path(temp_file)
+                    create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
+                    apply_mask_to_image(mask_path, temp_file, out_path)
+                    #shutil.move(temp_file, out_path)
+                    resample_image_in_place(out_path, out_resolution)
 
 
 def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, bands_to_stack=("B2","B3","B4")):

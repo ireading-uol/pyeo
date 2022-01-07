@@ -207,37 +207,45 @@ def get_raster_paths(paths, filepatterns, dirpattern):
     Returns:
       a dataframe of all found file paths, one line per path
     '''
+
     cols = ['safe_path']
     for filepattern in filepatterns:
         cols.append(filepattern)
     results = []
     # iterate over all SAFE directories
     for path in paths:
+        #log.info("  path = {}".format(path))
         row = [path]
         # iterate over all band file name patterns
         for filepattern in filepatterns:
+            #log.info("  filepattern = {}".format(filepattern))
             f = get_filenames(path, filepattern, dirpattern)
             if len(f) == 1:
                 row.append(f)
             if len(f) > 1:
-                log.warning("More than one file path returned in raster path search:")
-                log.error("  root = {}".format(path))
+                log.error("More than one file path returned in raster path search:")
+                log.error("  root        = {}".format(path))
                 log.error("  filepattern = {}".format(filepattern))
-                log.error("  dirpattern = {}".format(dirpattern))
-                log.error("The search returned:")
+                log.error("  dirpattern  = {}".format(dirpattern))
+                log.info("The search returned:")
                 for i in f:
-                    log.error("  {}".format(i))
+                    log.info("  {}".format(i))
+                row.append("")
             if len(f) == 0:
-                log.error("File path not found:")
-                log.error("  root = {}".format(path))
-                log.error("  filepattern = {}".format(filepattern))
-                log.error("  dirpattern = {}".format(dirpattern))
-        results.append(row)
-    arr = np.array(results).reshape(len(paths), len(row))
-    #log.info("Array shape = {}".format(arr.shape))
-    #log.info("Cols = {}".format(cols))
+                log.warning("File pattern {} and dir pattern {} not found in {}".format(filepattern, dirpattern, path))
+                row.append("")
+        #log.info("  results = {}".format(results))
+        #log.info("  paths   = {}".format(paths))
+        #log.info("  row     = {}".format(row))
+        results.extend(row)
+        #log.info("  results = {}".format(results))
+    if len(results) == len(paths) * (len(filepatterns) + 1):
+        arr = np.array(results).reshape(len(paths), len(filepatterns)+1)
+    else:
+        log.error("  Array shape = {}".format(arr.shape))
+        log.error("  Cols = {}".format(cols))
     results=pd.DataFrame(arr, columns=cols)
-    #log.info("DF = {}".format(results))
+    #log.info("  DF = {}".format(results))
     return(results)
 
 def check_for_invalid_l2_data(l2_SAFE_file, resolution="10m"):
