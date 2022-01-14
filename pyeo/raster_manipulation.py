@@ -2526,12 +2526,12 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
         if glob.glob(out_glob):
             log.info("  Skipping atmospheric correction. File exists at {}".format(out_path))
             continue
-        try:
-            l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
-        except (subprocess.CalledProcessError, BadS2Exception):
-            log.error("Atmospheric correction failed for {}. Moving on to next image.".format(image))
-            pass
         else:
+            try:
+                l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
+            except (subprocess.CalledProcessError, BadS2Exception):
+                log.error("Atmospheric correction failed for {}. Moving on to next image.".format(image))
+                pass
             l2_name = os.path.basename(l2_path)
             #log.info("Changing L2A path: {}".format(l2_path))
             #log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
@@ -2690,7 +2690,7 @@ def create_mask_from_scl_layer(l2_safe_path, out_path, scl_classes, buffer_size=
     log.info("  Opening SCL image: {}".format(scl_path))
     scl_image = gdal.Open(scl_path)
     scl_array = scl_image.GetVirtualMemArray()
-    mask_array = np.isin(scl_array, (scl_classes))
+    mask_array = np.logical_not(np.isin(scl_array, (scl_classes)))
     mask_image = create_matching_dataset(scl_image, out_path)
     mask_image_array = mask_image.GetVirtualMemArray(eAccess=gdal.GF_Write)
     np.copyto(mask_image_array, mask_array)
