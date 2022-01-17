@@ -689,7 +689,7 @@ def composite_images_with_mask(in_raster_path_list, composite_out_path, format="
     -----
     Masks are assumed to be a multiplicative .msk file with the same path as their corresponding image; see REFERENCE.
     All images must have the same number of layers and resolution, but do not have to be perfectly on top of each
-    other. If it does not exist, composite_out_path will be created. Takes projection, resolution, ect from first band
+    other. If it does not exist, composite_out_path will be created. Takes projection, resolution, etc. from first band
     of first raster in list. Will reproject images and masks if they do not match initial raster.
 
     If generate_date_images is True, an raster ending with the suffix .date will be created; each pixel will contain the
@@ -2992,7 +2992,7 @@ def combine_masks(mask_paths, out_path, combination_func = 'and', geometry_func 
     return out_path
 
 
-def buffer_mask_in_place(mask_path, buffer_size):
+def buffer_mask_in_place(mask_path, buffer_size, cache=None):
     """
     Expands a mask in-place, overwriting the previous mask
 
@@ -3008,7 +3008,15 @@ def buffer_mask_in_place(mask_path, buffer_size):
     log.info("Buffering {} with buffer size {}".format(mask_path, buffer_size))
     mask = gdal.Open(mask_path, gdal.GA_Update)
     mask_array = mask.GetVirtualMemArray(eAccess=gdal.GA_Update)
-    cache = morph.binary_erosion(mask_array.squeeze(), selem=morph.disk(buffer_size))
+    if buffer_size > 10:
+        bfs = int(buffer_size / 10)
+        if bfs * 10 != buffer_size:
+            log.warning("Approximating buffer size as 10*{} = {}".format(bfs, 10*bfs))
+        if cache is None:
+            cache = np.empty(mask_array.squeeze().shape, dtype=bool)
+        ndimage.binary_erosion(mask_array.squeeze(), structure=morph.disk(bfs), iterations=10, output=cache)
+    else:
+        cache = morph.binary_erosion(mask_array.squeeze(), selem=morph.disk(buffer_size))
     np.copyto(mask_array, cache)
     mask_array = None
     mask = None
