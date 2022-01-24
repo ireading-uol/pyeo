@@ -460,7 +460,7 @@ def strip_bands(in_raster_path, out_raster_path, bands_to_strip):
 def average_images(raster_paths, out_raster_path,
                  geometry_mode="intersect", format="GTiff", datatype=gdal.GDT_Int32):
     """
-    When provided with a list of rasters, will stack them into a single raster. The nunmber of
+    When provided with a list of rasters, will stack them into a single raster. The number of
     bands in the output is equal to the total number of bands in the input. Geotransform and projection
     are taken from the first raster in the list; there may be unexpected behavior if multiple differing
     projections are provided.
@@ -663,6 +663,104 @@ def mosaic_images(raster_path, out_raster_path, format="GTiff", datatype=gdal.GD
         out_raster_array = None
         out_raster = None
 
+def update_composite_with_images(composite_in_path, in_raster_path_list, composite_out_path, format="GTiff", generate_date_image=True, missing=0):
+    """
+    Works down in_raster_path_list, updating pixels in composite_out_path if not masked. Will also create a mask and
+    (optionally) a date image in the same directory.
+
+    Parameters
+    ----------
+    composite_in_path : str
+        The path of the input composite image to be updated
+    in_raster_path_list : list of str
+        A list of paths to rasters.
+    composite_out_path : str
+        The path of the output image
+    format : str, optional
+        The gdal format of the image. Defaults to "GTiff"
+    generate_date_image : bool, optional
+        If true, generates a single-layer raster containing the dates of each image detected - see below.
+    missing : missing value to be ignored, 0 by default
+        
+    Returns
+    -------
+    composite_path : str
+        The path to the composite.
+
+    Notes:
+
+    If generate_date_images is True, an raster ending with the suffix .date will be created; each pixel will contain the
+    timestamp (yyyymmdd) of the date that pixel was last seen in the composite.
+
+    """
+    log = logging.getLogger(__name__)
+    driver = gdal.GetDriverByName(format)
+    in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
+    in_composite = gdal.Open(composite_in_path)
+    projection = in_composite.GetProjection()
+    in_gt = in_composite.GetGeoTransform()
+    x_res = in_gt[1]
+    y_res = in_gt[5] * -1
+    n_bands = in_composite.RasterCount
+    temp_band = in_composite.GetRasterBand(1)
+    datatype = temp_band.DataType
+    temp_band = None
+
+    # Creating output image + array
+    log.info("Creating updated composite at {}".format(composite_out_path))
+    log.info("  based on previous composite {}".format(composite_in_path))
+    log.info("  x_res: {}, y_res: {}, {} bands, datatype: {}, projection: {}"
+             .format(x_res, y_res, n_bands, datatype, projection))
+    out_bounds = align_bounds_to_whole_number(get_poly_bounding_rect(get_combined_polygon(in_raster_list + [in_composite],
+                                                                                          geometry_mode="union")))
+    composite_image = create_new_image_from_polygon(out_bounds, composite_out_path, x_res, y_res, n_bands,
+                                                    projection, format, datatype)
+    if generate_date_image:
+        time_out_path = composite_out_path.rsplit('.')[0]+".dates"
+        dates_image = create_matching_dataset(composite_image, time_out_path, bands=1, datatype=gdal.GDT_UInt32)
+        dates_array = dates_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write).squeeze()
+
+    output_array = composite_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write, datatype=gdal.GDT_Float32)
+    if len(output_array.shape) == 2:
+        output_array = np.expand_dims(output_array, 0)
+
+    in_composite_array = get_array(in_composite)
+    #TODO: check this works 
+    np.copyto(output_array, in_composite_array)
+
+    for i, in_raster in enumerate(in_raster_list):
+        # Get a view of in_raster according to output_array
+        log.info("Adding {} to composite".format(in_raster_path_list[i]))
+        in_bounds = align_bounds_to_whole_number(get_raster_bounds(in_raster))
+        x_min, x_max, y_min, y_max = pixel_bounds_from_polygon(composite_image, in_bounds)
+        output_view = output_array[:, y_min:y_max, x_min:x_max]
+
+        # Move every pixel except missing values in in_raster to output_view
+        in_array = get_array(in_raster)
+        log.info("Type of in_array: {}".format(in_array.dtype))
+        log.info("Type of output_view: {}".format(output_view.dtype))
+        np.copyto(output_view, in_array, where=np.where(in_array == missing, False, True))
+
+        # Save dates in date_image if needed
+        if generate_date_image:
+            dates_view = dates_array[y_min: y_max, x_min: x_max]
+            # Gets timestamp as integer in form yyyymmdd
+            date = np.uint32(get_sen_2_image_timestamp(in_raster.GetFileList()[0]).split("T")[0])
+            dates_view[np.logical_not(in_masked.mask[0, ...])] = date
+            dates_view = None
+
+        # Deallocate
+        output_view = None
+        in_masked = None
+
+    output_array = None
+    dates_array = None
+    dates_image = None
+    composite_image = None
+
+    log.info("Composite update done.")
+    return composite_out_path
+
 
 def composite_images_with_mask(in_raster_path_list, composite_out_path, format="GTiff", generate_date_image=True):
     """
@@ -833,8 +931,6 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
     If generate_date_images is True, an raster ending with the suffix .date will be created; each pixel will contain the
     timestamp (yyyymmdd) of the date that pixel was last seen in the composite.
 
-    #TODO: Change the date image to contain Julian date numbers.
-
     """
 
     def median_of_raster_list(in_raster_path_list, out_raster_path, band=1, chunks=10, missing_data_value=0, format='GTiff'):
@@ -892,6 +988,7 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
                 res.append(b)
                 ds = None
             stacked = np.dstack(res)
+            #TODO: make sure this catches all pixels with missing values
             if missing_data_value is not None:
                 stacked = np.ma.getdata(np.ma.masked_equal(stacked, missing_data_value))
             median_raster = np.nanmedian(stacked, axis=-1)
@@ -1352,6 +1449,24 @@ def flatten_probability_image(prob_image, out_path):
     prob_array = None
     out_raster = None
     prob_raster = None
+
+def get_array(raster):
+    """
+    Returns a numpy array for the raster.
+
+    Parameters
+    ----------
+    raster : gdal.Dataset
+        A gdal.Dataset object
+
+    Returns
+    -------
+    array : numpy array
+        A numpy array of the raster
+
+    """
+    raster_array = raster.GetVirtualMemArray()
+    return np.array(raster_array)
 
 
 def get_masked_array(raster, mask_path):
@@ -1894,7 +2009,6 @@ def filter_by_class_map(image_path, class_map_path, out_map_path, classes_of_int
     """
     Filters a raster with a set of classes for corresponding for pixels in filter_map_path containing only
     classes_of_interest. Assumes that filter_map_path and class_map_path are same resolution and projection.
-
 
     Parameters
     ----------
@@ -2446,7 +2560,7 @@ def build_sen2cor_output_path(image_path, timestamp, version):
     if version >= "2.08.00":
         out_path = image_path.replace("MSIL1C", "MSIL2A")
         baseline = get_sen_2_baseline(image_path)
-        out_path = out_path.replace(baseline, "N9999")
+        #out_path = out_path.replace(baseline, "N9999")
         out_path = out_path.rpartition("_")[0] + "_" + timestamp + ".SAFE"
     else:
         out_path = image_path.replace("MSIL1C", "MSIL2A")
@@ -2728,7 +2842,7 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
         The path to the new mask.
 
     """
-    # TODO: pull this out of the above function
+    #TODO: pull this out of the above function
     class_image = gdal.Open(class_map_path)
     class_array = class_image.GetVirtualMemArray()
     mask_array = np.isin(class_array, classes_of_interest)
@@ -2798,7 +2912,7 @@ def array2raster(raster_file, new_raster_file, array):
 def apply_mask_to_image(mask_path, image_path, masked_image_path):
     """
     Applies a mask of 0 and 1 values to a raster image with one or more bands in Geotiff format
-    by multiplying each pixel values with the mask value.
+    by multiplying each pixel value with the mask value.
     
     After: 
         https://pcjericks.github.io/py-gdalogr-cookbook/raster_layers.html

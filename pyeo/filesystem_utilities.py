@@ -232,7 +232,7 @@ def get_raster_paths(paths, filepatterns, dirpattern):
                     log.info("  {}".format(i))
                 row.append("")
             if len(f) == 0:
-                log.warning("File pattern {} and dir pattern {} not found in {}".format(filepattern, dirpattern, path))
+                log.info("File pattern {} and dir pattern {} not found in {}".format(filepattern, dirpattern, path))
                 row.append("")
         #log.info("  results = {}".format(results))
         #log.info("  paths   = {}".format(paths))
@@ -473,6 +473,25 @@ def sort_by_timestamp(strings, recent_first=True):
     strings = list(filter(get_image_acquisition_time, strings))
     strings.sort(key=lambda x: get_image_acquisition_time(x), reverse=recent_first)
     return strings
+
+def get_change_detection_date_strings(image_name):
+    """
+    Extracts the before_date and after_date dates from a change detection image name.
+
+    Parameters
+    ----------
+    image_name : str
+        A Pyeo-produced image name (example: `class_composite_T36MZE_20190509T073621_20190519T073621.tif`)
+
+    Returns
+    -------
+    before_date, after_date : str
+        The dates associated with the image in string format
+
+    """
+    date_regex = r"\d\d\d\d\d\d\d\dT\d\d\d\d\d\d"
+    timestamps = re.findall(date_regex, image_name)
+    return timestamps
 
 
 def get_change_detection_dates(image_name):

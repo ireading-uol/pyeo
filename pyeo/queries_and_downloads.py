@@ -66,6 +66,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
 from multiprocessing.dummy import Pool
@@ -74,13 +75,11 @@ import numpy as np
 from bs4 import BeautifulSoup  # I didn't really want to use BS, but I can't see a choice.
 from tempfile import TemporaryDirectory
 from xml.etree import ElementTree
-
 import ogr, osr
 import requests
 import tenacity
 from botocore.exceptions import ClientError
 from requests import Request
-
 from sentinelhub import download_safe_format
 from sentinelsat import SentinelAPI, geojson_to_wkt, read_geojson
 
@@ -1174,6 +1173,11 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     passwd : str
         Scihub password
 
+    Returns
+    ----------
+    0 : No error
+    1 : HTTP Error in server response
+
     Notes
     -----
     If interrupted mid-download, there will be a .incomplete file in the download folder. You might need to remove
@@ -1209,18 +1213,25 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     else:
         log.info("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
         log.info("Remember: \'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")
-        @tenacity.retry(stop=tenacity.stop_after_attempt(5), wait=tenacity.wait_fixed(601))
-        def download_all(*args, **kwargs):
-            return api.download_all(*args, **kwargs)
-        downloaded, triggered, failed = api.download_all([product_uuid], out_folder, max_attempts=10, checksum=True,
-                                                     n_concurrent_dl=2, lta_retry_delay=600)
-        prod = downloaded[product_uuid]
-        if len(downloaded) > 0:
-            log.info("Downloaded: {}".format(prod))
-        if len(triggered) > 0:
-            log.info("Triggered: {}".format(triggered))
-        if len(failed) > 0:
-            log.warning("Failed: {}".format(failed))
+        try:
+            @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(601))
+            def download_all(*args, **kwargs):
+                return api.download_all(*args, **kwargs)
+            downloaded, triggered, failed = api.download_all([product_uuid], out_folder, max_attempts=20, checksum=True,
+                                                             n_concurrent_dl=2, lta_retry_delay=600)
+            prod = downloaded[product_uuid]
+            if len(downloaded) > 0:
+                log.info("Downloaded: {}".format(prod))
+            if len(triggered) > 0:
+                log.info("Triggered: {}".format(triggered))
+            if len(failed) > 0:
+                log.warning("Failed: {}".format(failed))
+        except:
+            e = sys.exc_info()[0]
+            log.info("\n-------------------------------------------------------------")
+            log.warning("Server Error: {}".format(e))
+            log.info("-------------------------------------------------------------\n")
+            return 1
     zip_path = os.path.join(out_folder, prod['title'] + ".zip")
     log.info("Unzipping {} to {}".format(zip_path, out_folder))
     zip_ref = zipfile.ZipFile(zip_path, 'r')
