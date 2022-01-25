@@ -953,7 +953,9 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
         #elif source == 'google':
         #    download_from_google_cloud([new_data[image_uuid]['identifier']], out_folder=out_path)
         elif source == 'scihub':
-            download_from_scihub(image_uuid, out_path, user, passwd)
+            e = download_from_scihub(image_uuid, out_path, user, passwd)
+            if e == 1:
+                log.warning("Something went wrong in the download from Copernicus SciHub.")
         else:
             log.error("Invalid data source; valid values are 'aws' and 'scihub'")
             raise BadDataSourceExpection
@@ -1052,7 +1054,10 @@ def download_s2_data_from_df(new_data, l1_dir, l2_dir, source='scihub', user=Non
         #elif source == 'google':
         #    download_from_google_cloud([identifier], out_folder=out_path)
         elif source == 'scihub':
-            download_from_scihub(index, out_path, user, passwd)
+            e = download_from_scihub(index, out_path, user, passwd)
+            if e == 1:
+                log.warning("Something went wrong in the download from Copernicus SciHub.")
+
         else:
             log.error("Invalid data source; valid values are 'aws' and 'scihub'")
             raise BadDataSourceExpection
@@ -1155,7 +1160,10 @@ def download_from_aws_with_rollback(product_id, folder, uuid, user, passwd):
         log.warning(
             "Something wrong with AWS for products id {}; rolling back to Scihub using uuid {}".format(product_id,
                                                                                                        uuid))
-        download_from_scihub(uuid, folder, user, passwd)
+        e = download_from_scihub(uuid, folder, user, passwd)
+        if e == 1:
+            log.warning("Something went wrong in the download from Copernicus SciHub.")
+
 
 
 def download_from_scihub(product_uuid, out_folder, user, passwd):

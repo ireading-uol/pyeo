@@ -2859,6 +2859,108 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
         buffer_mask_in_place(out_path, buffer_size)
     return out_path
 
+def add_masks(mask_paths, out_path, geometry_func="union"):
+    """
+    Creates a raster file by adding a list of mask files containing 0 and 1 values
+
+    Parameters
+    ----------
+    mask_paths : list of str
+        List of strings containing the full directory paths and file names of all masks to be added
+    geometry_func : {'intersect' or 'union'}
+        How to handle non-overlapping masks. Defaults to 'union'
+
+    Returns
+    -------
+    out_path : str
+        The path to the new raster file.
+
+    """
+    #TODO: test this function
+    log = logging.getLogger(__name__)
+    log.info("Adding masks:")
+    for mask in mask_paths:
+        log.info("   {}".format(mask))
+    masks = [gdal.Open(mask_path)
+             for mask_path
+             in mask_paths]
+    if None in masks:
+        raise FileNotFoundError("Bad mask path in one of the following: {}".format(mask_paths))
+    combined_polygon = align_bounds_to_whole_number(get_combined_polygon(masks, geometry_func))
+    gt = masks[0].GetGeoTransform()
+    x_res = gt[1]
+    y_res = gt[5]*-1  # Y res is -ve in geotransform
+    bands = 1
+    projection = masks[0].GetProjection()
+    out_raster = create_new_image_from_polygon(combined_polygon, out_path, x_res, y_res,
+                                               bands, projection, datatype=gdal.GDT_Byte, nodata=0)
+    out_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write)
+    out_array = out_array.squeeze() # This here to account for unaccountable extra dimension Windows patch adds
+    out_array[:, :] = 1
+    for mask_index, in_mask in enumerate(masks):
+        in_mask_array = in_mask.GetVirtualMemArray()
+        in_mask_array = in_mask_array.squeeze()  # See previous comment
+        if geometry_func == "intersect":
+            out_x_min, out_x_max, out_y_min, out_y_max = pixel_bounds_from_polygon(out_raster, combined_polygon)
+            in_x_min, in_x_max, in_y_min, in_y_max = pixel_bounds_from_polygon(in_mask, combined_polygon)
+        elif geometry_func == "union":
+            out_x_min, out_x_max, out_y_min, out_y_max = pixel_bounds_from_polygon(out_raster, get_raster_bounds(in_mask))
+            in_x_min, in_x_max, in_y_min, in_y_max = pixel_bounds_from_polygon(in_mask, get_raster_bounds(in_mask))
+        else:
+            raise Exception("Invalid geometry_func; can be 'intersect' or 'union'")
+        out_view = out_array[out_y_min: out_y_max, out_x_min: out_x_max]
+        in_mask_view = in_mask_array[in_y_min: in_y_max, in_x_min: in_x_max]
+        if mask_index == 0:
+            out_view[:,:] = in_mask_view
+        else:
+            out_mask_view[:, :] = np.nansum(out_view, in_mask_view, dtype=np.uint8)
+        in_mask_view = None
+        out_view = None
+        in_mask_array = None
+        in_mask = None
+    out_array = None
+    out_raster = None
+    return out_path
+
+
+def verify_change_detections(class_map_paths, out_path, classes_of_interest, buffer_size=0, out_resolution=None):
+    """
+    Verifies repeated change detections from subsequent class maps.
+    Reads in a list of classification masks where 1 shows pixels containing a change class and adds them up.
+    Classification maps are sorted by timestamp in the file name.
+    The result is a raster file that contains a number from 0 (no change detected) to n (number of mask files)
+    where n is the greatest confidence in the change detection.
+
+    Parameters
+    ----------
+    class_map_paths : list of str
+        List of paths to the classification maps to build the mask from
+    out_path : str
+        Path to the new raster file containing the confidence layer
+    classes_of_interest : list of int
+        The list of classes to count as clear pixels
+    buffer_size : int
+        If greater than 0, applies a buffer to the masked pixels of this size. Defaults to 0.
+    out_resolution : int or None, optional
+        If present, resamples the mask to this resolution. Applied before buffering. Defaults to 0.
+
+    Returns
+    -------
+    out_path : str
+        The path to the new mask.
+    """
+
+    #TODO: test this function
+    log.info("Producing confidence layer.")
+    # create masks from the classes of interest
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        class_mask_paths = [ create_mask_from_class_map(f, \
+                             os.path.join(td, f.split(sep=".")[0]+"_temp.msk") , classes_of_interest, \
+                             buffer_size=0, out_resolution=None) for f in class_map_paths]
+        # combine masks from n subsequent dates into a confirmed change detection image
+        add_masks(class_mask_paths, out_path, geometry_func="union")
+    return out_path
+
 
 def raster2array(raster_file):
     """
@@ -3040,7 +3142,6 @@ def combine_masks(mask_paths, out_path, combination_func = 'and', geometry_func 
         - any pixel ('or') is masked
         - or all pixels ('and') are masked
         ..in the corresponding pixels in the list of masks. Defaults to 'and'
-
     geometry_func : {'intersect' or 'union'}
         How to handle non-overlapping masks. Defaults to 'intersect'
 
