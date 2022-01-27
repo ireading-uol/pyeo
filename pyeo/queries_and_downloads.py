@@ -1047,10 +1047,10 @@ def download_s2_data_from_df(new_data, l1_dir, l2_dir, source='scihub', user=Non
         log.info("Downloading {} from {} to {}".format(identifier, source, out_path))
         if source == 'aws':
             if try_scihub_on_fail:
-                download_from_aws_with_rollback(product_id=index, folder=out_path,
+                download_from_aws_with_rollback(product_id=identifier, folder=out_path,
                                                 uuid=image_uuid, user=user, passwd=passwd)
             else:
-                download_safe_format(product_id=index, folder=out_path)
+                download_safe_format(product_id=identifier, folder=out_path)
         #elif source == 'google':
         #    download_from_google_cloud([identifier], out_folder=out_path)
         elif source == 'scihub':

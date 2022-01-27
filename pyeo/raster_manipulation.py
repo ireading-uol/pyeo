@@ -1616,7 +1616,7 @@ def clip_raster_to_intersection(raster_to_clip_path, extent_raster_path, out_ras
 
 
 def create_new_image_from_polygon(polygon, out_path, x_res, y_res, bands,
-                           projection, format="GTiff", datatype = gdal.GDT_Int32, nodata = -9999):
+                           projection, format="GTiff", datatype = gdal.GDT_Int32, nodata = 0):
     """
     Returns an empty image that covers the extent of the input polygon.
 

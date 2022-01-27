@@ -47,7 +47,8 @@ import pyeo.windows_compatability
 
 log = logging.getLogger(__name__)
 
-def change_from_composite(image_path, composite_path, model_path, class_out_path, prob_out_path=None):
+
+def change_from_composite(image_path, composite_path, model_path, class_out_path, prob_out_path=None, skip_existing=False):
     """
     Stacks an image with a composite and classifies each pixel change with a scikit-learn model.
 
@@ -74,17 +75,19 @@ def change_from_composite(image_path, composite_path, model_path, class_out_path
         A location to save the resulting classification .tif
     prob_out_path : str, optional
         A location to save the probability raster of each pixel.
+    skip_existing : bool, optional
+        If true, do not run if class_out_path already exists. Defaults to False.
 
 
     """
     with TemporaryDirectory() as td:
         stacked_path = os.path.join(td, "comp_stack.tif")
         stack_images((composite_path, image_path), stacked_path)
-        classify_image(stacked_path, model_path, class_out_path, prob_out_path)
+        classify_image(stacked_path, model_path, class_out_path, prob_out_path, skip_existing)
 
 
 def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
-                   apply_mask=False, out_type="GTiff", num_chunks=10, nodata=0, skip_existing = False):
+                   apply_mask=False, out_type="GTiff", num_chunks=4, nodata=0, skip_existing = False):
     """
     Produces a class map from a raster and a model.
     This applies the model's fit() function to each pixel in the input raster, and saves the result into an output
@@ -206,12 +209,12 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
         # process the residual pixels with the last chunk
         if chunk_id == num_chunks - 1:
             chunk_size = chunk_size + chunk_resid
-        log.info("   Classifying chunk {} of size {}".format(chunk_id, chunk_size))
+        log.info("   Classifying chunk {} of size {}".format(chunk_id+1, chunk_size))
         chunk_view = good_samples[offset : offset + chunk_size]
         #indices_view = good_indices[offset : offset + chunk_size]
-        log.info("   Creating out_view")
+        #log.info("   Creating out_view")
         out_view = classes[offset : offset + chunk_size]  # dimensions [chunk_size]
-        log.info("   Calling model.predict")
+        #log.info("   Calling model.predict")
         chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
         out_view[:] = model.predict(chunk_view)
 
@@ -220,24 +223,24 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
             prob_view = probs[offset : offset + chunk_size, :]
             prob_view[:, :] = model.predict_proba(chunk_view)
 
-    log.info("   Creating class array of size {}".format(n_samples))
+    #log.info("   Creating class array of size {}".format(n_samples))
     class_out_array = np.full((n_samples), nodata)
     for i, class_val in zip(good_indices, classes):
         class_out_array[i] = class_val
 
-    log.info("   Creating GDAL class image")
+    #log.info("   Creating GDAL class image")
     class_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :] = \
         reshape_ml_out_to_raster(class_out_array, image.RasterXSize, image.RasterYSize)
 
     if prob_out_path:
-        log.info("   Creating probability array of size {}".format(n_samples * model.n_classes_))
+        #log.info("   Creating probability array of size {}".format(n_samples * model.n_classes_))
         prob_out_array = np.full((n_samples, model.n_classes_), nodata)
         for i, prob_val in zip(good_indices, probs):
             prob_out_array[i] = prob_val
-        log.info("   Creating GDAL probability image")
-        log.info("   N Classes = {}".format(prob_out_array.shape[1]))
-        log.info("   Image X size = {}".format(image.RasterXSize))
-        log.info("   Image Y size = {}".format(image.RasterYSize))
+        #log.info("   Creating GDAL probability image")
+        #log.info("   N Classes = {}".format(prob_out_array.shape[1]))
+        #log.info("   Image X size = {}".format(image.RasterXSize))
+        #log.info("   Image Y size = {}".format(image.RasterYSize))
         prob_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :, :] = \
             reshape_prob_out_to_raster(prob_out_array, image.RasterXSize, image.RasterYSize)
 
@@ -252,7 +255,7 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
 def classify_image_and_composite(image_path, composite_path, model_path, class_out_path, prob_out_path=None,
                    apply_mask=False, out_type="GTiff", num_chunks=10, nodata=0, skip_existing = False):
     """
-    !!! WARNING - not successfully tested yet. Use change_from_composite() function instead.
+    !!! WARNING - currently does nothing. Not successfully tested yet. Use change_from_composite() function instead.
 
     Produces a class map from a raster file, a composite raster file and a model.
     This applies the model's fit() function to each pixel in the input raster, and saves the result into an output
@@ -295,7 +298,6 @@ def classify_image_and_composite(image_path, composite_path, model_path, class_o
                                 and produces n_classes_ outputs corresponding to the probabilties of a given pixel being
                                 that class
 
-    """
     if skip_existing:
         log.info("Checking for existing classification {}".format(class_out_path))
         if os.path.isfile(class_out_path):
@@ -424,7 +426,10 @@ def classify_image_and_composite(image_path, composite_path, model_path, class_o
     else:
         log.warning("No good pixels found - no classification image was created.")
         return ""
-
+    """
+    log.error("This function currently does nothing. Call pyeo.classification.change_from_composite instead.")
+    return ""
+    
 
 
 
