@@ -3362,7 +3362,7 @@ def apply_fmask(in_safe_dir, out_file, fmask_command="fmask_sentinel2Stacked.py"
         if nextline == '' and fmask_proc.poll() is not None:
             break
 
-def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG", bands=[1,2,3], nodata=0):
+def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG", bands=[1,2,3], nodata=None):
     """
     Creates a quicklook image of reduced size from an input GDAL object and saves it to out_raster_path.
 
@@ -3380,7 +3380,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         GDAL format for the quicklook raster file, default PNG
     bands : list of numbers
         List of the band numbers to be displayed as RGB. Will be ignored if only one band is in the image raster.
-    nodata : number
+    nodata : number (optional)
         Missing data value.
 
     Returns

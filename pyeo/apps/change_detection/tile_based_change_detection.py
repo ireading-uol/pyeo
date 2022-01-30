@@ -595,8 +595,8 @@ def rolling_detection(config_path,
                                                                   width=512, 
                                                                   height=512, 
                                                                   format="PNG", 
-                                                                  bands=[3,2,1], 
-                                                                  nodata=0)
+                                                                  bands=[3,2,1]
+                                                                  )
 
 
         # ------------------------------------------------------------------------
