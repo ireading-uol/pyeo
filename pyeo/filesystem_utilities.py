@@ -83,6 +83,7 @@ def create_file_structure(root):
         --classified
         --probabilities
 
+
     Parameters
     ----------
     root : str
@@ -107,6 +108,7 @@ def create_file_structure(root):
         "output/probabilities",
         "output/report_image",
         "output/display_images",
+        "output/quicklooks/",
         "log/"
     ]
     for dir in dirs:
@@ -142,16 +144,17 @@ def create_folder_structure_for_tiles(root):
     os.chdir(root)
     dirs = [
         "composite/",
-        "composite/L1C",
-        "composite/L2A",
-        "composite/cloud_masked",
+        "composite/L1C/",
+        "composite/L2A/",
+        "composite/cloud_masked/",
         "images/",
         "images/L1C/",
         "images/L2A/",
         "images/cloud_masked/",
         "output/",
-        "output/classified",
-        "output/probabilities",
+        "output/classified/",
+        "output/probabilities/",
+        "output/quicklooks/",
         "log/"
     ]
     for dir in dirs:

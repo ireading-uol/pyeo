@@ -144,6 +144,8 @@ from pyeo.filesystem_utilities import sort_by_timestamp, get_sen_2_tiles, get_l1
     get_safe_product_type, get_change_detection_dates, get_filenames, get_raster_paths
 from pyeo.exceptions import CreateNewStacksException, StackImagesException, BadS2Exception, NonSquarePixelException
 
+gdal.UseExceptions()
+
 log = logging.getLogger("pyeo")
 
 import pyeo.windows_compatability
@@ -152,8 +154,7 @@ faulthandler.enable()
 
 
 
-def create_matching_dataset(in_dataset, out_path,
-                            format="GTiff", bands=1, datatype = None):
+def create_matching_dataset(in_dataset, out_path, format='GTiff', bands=1, datatype = None):
     """
     Creates an empty gdal dataset with the same dimensions, projection and geotransform as in_dataset.
     Defaults to 1 band.
@@ -166,7 +167,7 @@ def create_matching_dataset(in_dataset, out_path,
     out_path : str
         The path to save the copied dataset to
     format : str, optional
-        The Ggal image format. Defaults to geotiff ("GTiff"); for a full list, see https://gdal.org/drivers/raster/index.html
+        The Gdal image format. Defaults to geotiff ("GTiff"); for a full list, see https://gdal.org/drivers/raster/index.html
     bands : int, optional
         The number of bands in the dataset. Defaults to 1.
     datatype : gdal constant, optional
@@ -183,7 +184,14 @@ def create_matching_dataset(in_dataset, out_path,
     The default of bands=1 will be changed to match the input dataset in the next release of Pyeo
 
     """
-    driver = gdal.GetDriverByName(format)
+    #TODO: it does not recognise the string variable format here
+    log.info("Driver should be of type: {}".format('GTiff'))
+    try:
+        driver = gdal.GetDriverByName('GTiff')
+    except RunTimeError as e:
+        log.error("GDAL.GetDriverByName error: {}".format(e))
+        sys.exit(1)
+    log.info("Driver is of type: {}".format(type(driver)))
     if datatype is None:
         datatype = in_dataset.GetRasterBand(1).DataType
     out_dataset = driver.Create(out_path,
@@ -220,7 +228,7 @@ def save_array_as_image(array, path, geotransform, projection, format = "GTiff")
         The path to the image
 
     """
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     type_code = gdal_array.NumericTypeCodeToGDALTypeCode(array.dtype)
     # If array is 2d, give it an extra dimension.
     if len(array.shape) == 2:
@@ -497,6 +505,8 @@ def average_images(raster_paths, out_raster_path,
     # Creating a new gdal object
     out_raster = create_new_image_from_polygon(combined_polygons, out_raster_path, x_res, y_res,
                                                most_rasters, projection, format, datatype)
+    if out_raster is None:
+        log.error("Could not create: {}".format(out_raster_path))
 
     # I've done some magic here. GetVirtualMemArray lets you change a raster directly without copying
     out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write)
@@ -694,7 +704,7 @@ def update_composite_with_images(composite_in_path, in_raster_path_list, composi
 
     """
     log = logging.getLogger(__name__)
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
     in_composite = gdal.Open(composite_in_path)
     projection = in_composite.GetProjection()
@@ -796,7 +806,7 @@ def composite_images_with_mask(in_raster_path_list, composite_out_path, format="
     """
 
     log = logging.getLogger(__name__)
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
     projection = in_raster_list[0].GetProjection()
     in_gt = in_raster_list[0].GetGeoTransform()
@@ -882,7 +892,7 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
     """
 
     log = logging.getLogger(__name__)
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     in_raster = gdal.Open(in_raster_path)
     n_bands = in_raster.RasterCount
     result = {}
@@ -954,7 +964,7 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
         """
 
         in_raster = gdal.Open(in_raster_path_list[0])
-        driver = gdal.GetDriverByName(format)
+        driver = gdal.GetDriverByName(str(format))
         projection = in_raster.GetProjection()
         in_gt = in_raster.GetGeoTransform()
         temp_band = in_raster.GetRasterBand(1)
@@ -1006,7 +1016,7 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
         median_raster = None
 
     log = logging.getLogger(__name__)
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
     projection = in_raster_list[0].GetProjection()
     in_gt = in_raster_list[0].GetGeoTransform()
@@ -1105,7 +1115,7 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
         """
 
         in_raster = gdal.Open(in_raster_path_list[0])
-        driver = gdal.GetDriverByName(format)
+        driver = gdal.GetDriverByName(str(format))
         projection = in_raster.GetProjection()
         in_gt = in_raster.GetGeoTransform()
         temp_band = in_raster.GetRasterBand(1)
@@ -1156,7 +1166,7 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
         median_raster = None
 
     log = logging.getLogger(__name__)
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
     projection = in_raster_list[0].GetProjection()
     in_gt = in_raster_list[0].GetGeoTransform()
@@ -1616,7 +1626,7 @@ def clip_raster_to_intersection(raster_to_clip_path, extent_raster_path, out_ras
 
 
 def create_new_image_from_polygon(polygon, out_path, x_res, y_res, bands,
-                           projection, format="GTiff", datatype = gdal.GDT_Int32, nodata = 0):
+                                  projection, format="GTiff", datatype = gdal.GDT_Int32, nodata = 0):
     """
     Returns an empty image that covers the extent of the input polygon.
 
@@ -1651,7 +1661,7 @@ def create_new_image_from_polygon(polygon, out_path, x_res, y_res, bands,
         bounds_y_min, bounds_y_max = bounds_y_max, bounds_y_min
     final_width_pixels = int(np.abs(bounds_x_max - bounds_x_min) / x_res)
     final_height_pixels = int(np.abs(bounds_y_max - bounds_y_min) / y_res)
-    driver = gdal.GetDriverByName(format)
+    driver = gdal.GetDriverByName(str(format))
     out_raster = driver.Create(
         out_path, xsize=final_width_pixels, ysize=final_height_pixels,
         bands=bands, eType=datatype)
@@ -1983,7 +1993,7 @@ def raster_sum(inRstList, outFn, outFmt='GTiff'):
         empty_arr = empty_arr + arr
 
     # Create a 1 band GeoTiff with the same properties as the input raster
-    driver = gdal.GetDriverByName(outFmt)
+    driver = gdal.GetDriverByName(str(outFmt))
     out_ds = driver.Create(outFn, in_band.XSize, in_band.YSize, 1,
                            in_band.DataType)
     out_ds.SetProjection(in_ds.GetProjection())
@@ -2246,7 +2256,7 @@ def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, 
         band_path_list.append(glob.glob(band_glob)[0])
 
     n_bands = len(band_path_list)
-    driver = gdal.GetDriverByName("GTiff")
+    driver = gdal.GetDriverByName(str("GTiff"))
     first_ls_raster = gdal.Open(band_path_list[0])
     first_ls_array = first_ls_raster.GetVirtualMemArray()
     out_image = driver.Create(out_image_path,
@@ -2359,7 +2369,6 @@ def get_sen_2_band_path(safe_dir, band, resolution=None):
     else:
         res_string = ""
 
-    #TODO: fix this
     if get_safe_product_type(safe_dir) == "MSIL1C":
         filepattern = "_"+band+".jp2"
         band_paths = get_filenames(safe_dir, filepattern, "IMG_DATA")
@@ -2379,8 +2388,8 @@ def get_sen_2_band_path(safe_dir, band, resolution=None):
                 band_paths = get_filenames(safe_dir, filepattern, res_string)
                 band_path = band_paths[0]
                 #band_path = glob.glob(band_glob)[0]
-            except IndexError:
-                log.warning("Band {} not found of specified resolution, searching in other available resolutions".format(band))
+            except IndexError as e:
+                log.warning("Band {} not found of specified resolution, searching in other available resolutions: {}".format(band, e))
 
         if res_string is None or 'band_path' not in locals():  # Else use the highest resolution available for that band
             band_paths=[]
@@ -2466,8 +2475,8 @@ def stack_old_and_new_images(old_image_path, new_image_path, out_dir, create_com
             try:
                 combine_masks([old_mask_path, new_mask_path], out_mask_path,
                               combination_func="and", geometry_func="intersect")
-            except FileNotFoundError:
-                log.error("Mask not found for either {} or {}".format(old_image_path, new_image_path))
+            except FileNotFoundError as e:
+                log.error("Mask not found for either {} or {}: {}".format(old_image_path, new_image_path, e))
         return out_path + ".tif"
     else:
         log.error("Tiles  of the two images do not match. Aborted.")
@@ -2999,7 +3008,7 @@ def array2raster(raster_file, new_raster_file, array):
     cols = raster.RasterXSize
     rows = raster.RasterYSize
     bands = raster.RasterCount
-    driver = gdal.GetDriverByName('GTiff')
+    driver = gdal.GetDriverByName(str('GTiff'))
     outRaster = driver.Create(new_raster_file, cols, rows, bands, gdal.GDT_Float32)
     outRaster.SetGeoTransform((originX, pixelWidth, 0, originY, 0, pixelHeight))
     for band in range(bands):
@@ -3352,5 +3361,70 @@ def apply_fmask(in_safe_dir, out_file, fmask_command="fmask_sentinel2Stacked.py"
             log.info(nextline)
         if nextline == '' and fmask_proc.poll() is not None:
             break
+
+def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG", bands=[1,2,3], nodata=0):
+    """
+    Creates a quicklook image of reduced size from an input GDAL object and saves it to out_raster_path.
+
+    Parameters
+    ----------
+    in_raster_path : string
+        The string containing the full directory path to the input file for the quicklook
+    out_raster_path : string
+        The string containing the full directory path to the output file for the quicklook
+    width : number
+        Width of the output raster in pixels
+    height : number
+        Height of the output raster in pixels
+    format : string, optional
+        GDAL format for the quicklook raster file, default PNG
+    bands : list of numbers
+        List of the band numbers to be displayed as RGB. Will be ignored if only one band is in the image raster.
+    nodata : number
+        Missing data value.
+
+    Returns
+    -------
+    out_raster_path : string
+        The output path of the generated quicklook raster file
+    """
+    # Useful options:
+    # widthPct --- width of the output raster in percentage (100 = original width)
+    # heightPct --- height of the output raster in percentage (100 = original height)
+    # xRes --- output horizontal resolution
+    # yRes --- output vertical resolution
+    image = gdal.Open(in_raster_path)
+    if len(bands) > image.RasterCount:
+        log.warning("Fewer than 3 bands. Visualising only band 1.")
+        bands=[1]
+    kwargs = {
+        'format': format,
+        'outputType': gdal.GDT_Byte,
+        'bandList' : bands,
+        'noData' : nodata,
+        'width' : width,
+        'height' : height,
+    }
+    image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
+    image = None
+    # All the options that gdal.Translate() takes are listed here: gdal.org/python/osgeo.gdal-module.html#TranslateOptions
+    return out_raster_path
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

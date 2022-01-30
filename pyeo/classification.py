@@ -45,10 +45,12 @@ from pyeo.raster_manipulation import stack_images, create_matching_dataset, appl
 
 import pyeo.windows_compatability
 
+gdal.UseExceptions()
+
 log = logging.getLogger(__name__)
 
 
-def change_from_composite(image_path, composite_path, model_path, class_out_path, prob_out_path=None, skip_existing=False):
+def change_from_composite(image_path, composite_path, model_path, class_out_path, prob_out_path=None, skip_existing=False, apply_mask=False):
     """
     Stacks an image with a composite and classifies each pixel change with a scikit-learn model.
 
@@ -77,19 +79,32 @@ def change_from_composite(image_path, composite_path, model_path, class_out_path
         A location to save the probability raster of each pixel.
     skip_existing : bool, optional
         If true, do not run if class_out_path already exists. Defaults to False.
-
-
+    apply_mask : bool, optional
+        If True, uses the .msk file corresponding to the image at image_path to skip any invalid pixels. Default False.
     """
-    with TemporaryDirectory() as td:
-        stacked_path = os.path.join(td, "comp_stack.tif")
-        stack_images((composite_path, image_path), stacked_path)
-        classify_image(stacked_path, model_path, class_out_path, prob_out_path, skip_existing)
+
+    if os.path.exists(composite_path):
+        if os.path.exists(image_path):
+            with TemporaryDirectory(dir=os.getcwd()) as td:
+                stacked_path = os.path.join(td, "comp_stack.tif")
+                log.info("stacked path: {}".format(stacked_path))
+                stack_images([composite_path, image_path], stacked_path)
+                log.info(" stacked path exists? {}".format(os.path.exists(stacked_path)))
+                classify_image(stacked_path, model_path, class_out_path, prob_out_path, apply_mask, skip_existing)
+                log.info(" class out path exists? {}".format(os.path.exists(class_out_path)))
+                return
+        else:
+            log.error("File not found: {}".format(image_path))
+    else:
+        log.error("File not found: {}".format(composite_path))
+    return
 
 
-def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
-                   apply_mask=False, out_type="GTiff", num_chunks=4, nodata=0, skip_existing = False):
+def classify_image(image_path, model_path, class_out_path, prob_out_path=None, apply_mask=False, out_type="GTiff", num_chunks=4, nodata=0, skip_existing = False):
     """
+
     Produces a class map from a raster and a model.
+
     This applies the model's fit() function to each pixel in the input raster, and saves the result into an output
     raster. The model is presumed to be a scikit-learn fitted model created using one of the other functions in this
     library (:py:func:`create_model_from_signatures` or :py:func:`create_trained_model`).
@@ -116,7 +131,6 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
     skip_existing : bool, optional
         If true, do not run if class_out_path already exists. Defaults to False.
 
-
     Notes
     -----
     If you want to create a custom model, the object is presumed to have the following methods and attributes:
@@ -129,6 +143,7 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
                                 that class
 
     """
+
     if skip_existing:
         log.info("Checking for existing classification {}".format(class_out_path))
         if os.path.isfile(class_out_path):
@@ -136,26 +151,39 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None,
             return class_out_path
     log.info("Classifying file: {}".format(image_path))
     log.info("Saved model     : {}".format(model_path))
-    image = gdal.Open(image_path)
+    log.info("Image file exists? {}".format(os.path.exists(image_path)))
+    if not os.path.exists(image_path):
+        log.error("File not found: {}".format(image_path))
+    if not os.path.exists(model_path):
+        log.error("File not found: {}".format(model_path))
+    try:
+        image = gdal.Open(image_path)
+    except RuntimeError as e:
+        log.info("Exception: {}".format(e))
+        exit(1)
+    log.info("Image file opened: {}".format(image_path))
     if num_chunks == None:
         log.info("No chunk size given, attempting autochunk.")
         num_chunks = autochunk(image)
         log.info("Autochunk to {} chunks".format(num_chunks))
     try:
         model = sklearn_joblib.load(model_path)
-    except KeyError:
-        log.warning("Sklearn joblib import failed,trying generic joblib")
+    except KeyError as e:
+        log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
         model = joblib.load(model_path)
-    except TypeError:
-        log.warning("Sklearn joblib import failed,trying generic joblib")
+    except TypeError as e:
+        log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
         model = joblib.load(model_path)
+    log.info("Create matching dataset from type {}".format(type(image)))
+    #TODO: it crashes here - Why does the following line give 'False' as output?
+    log.info("Format {}".format(out_type))
     class_out_image = create_matching_dataset(image, class_out_path, format=out_type, datatype=gdal.GDT_Byte)
     log.info("Created classification image file: {}".format(class_out_path))
     if prob_out_path:
         try:
             log.info("n classes in the model: {}".format(model.n_classes_))
-        except AttributeError:
-            log.warning("Model has no n_classes_ attribute (known issue with GridSearch)")
+        except AttributeError as e:
+            log.warning("Model has no n_classes_ attribute (known issue with GridSearch): {}".format(e))
         prob_out_image = create_matching_dataset(image, prob_out_path, bands=model.n_classes_, datatype=gdal.GDT_Float32)
         log.info("Created probability image file: {}".format(prob_out_path))
     model.n_cores = -1
@@ -867,7 +895,7 @@ def raster_reclass_binary(img_path, rcl_value, outFn, outFmt='GTiff', write_out=
     in_array[in_array == rcl_value] = 1
 
     if write_out:
-        driver = gdal.GetDriverByName(outFmt)
+        driver = gdal.GetDriverByName(str(outFmt))
         out_ds = driver.Create(outFn, in_band.XSize, in_band.YSize, 1,
                                in_band.DataType)
         out_ds.SetProjection(in_ds.GetProjection())

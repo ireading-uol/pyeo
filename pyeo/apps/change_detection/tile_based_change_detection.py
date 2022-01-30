@@ -36,6 +36,8 @@ import pandas as pd
 import datetime as dt
 from tempfile import TemporaryDirectory
 
+gdal.UseExceptions()
+
 def rolling_detection(config_path,
                       arg_start_date=None,
                       arg_end_date=None,
@@ -47,12 +49,13 @@ def rolling_detection(config_path,
                       build_prob_image=False,
                       do_classify=False,
                       do_update=False,
-                      do_delete=False,
+                      do_quicklooks=False,
+                      do_delete=False
                       ):
 
     # If any processing step args are present, do not assume that we want to do all steps
     do_all = True
-    if (build_composite or do_download or do_classify or do_update or do_delete) == True:
+    if (build_composite or do_download or do_classify or do_update or do_delete or do_quicklooks) == True:
         do_all = False
     conf = configparser.ConfigParser(allow_no_value=True)
     conf.read(config_path)
@@ -87,6 +90,8 @@ def rolling_detection(config_path,
         log.info("  --build_prob_image to save classification probability layers")
     if do_update:
         log.info("  --do_update to update the baseline composite with new observations")
+    if do_quicklooks:
+        log.info("  --do_quicklooks to create image quicklooks")
     if do_delete:
         log.info("  --do_delete to remove the downloaded L1C, L2A and cloud-masked composite layers after use")
 
@@ -102,6 +107,7 @@ def rolling_detection(config_path,
         composite_l1_image_dir = os.path.join(tile_root_dir, r"composite/L1C")
         composite_l2_image_dir = os.path.join(tile_root_dir, r"composite/L2A")
         composite_l2_masked_image_dir = os.path.join(tile_root_dir, r"composite/cloud_masked")
+        quicklook_dir = os.path.join(tile_root_dir, r"output/quicklooks")
 
         if arg_start_date == "LATEST":
             # Returns the yyyymmdd string of the latest classified image
@@ -377,7 +383,7 @@ def rolling_detection(config_path,
             log.info("---------------------------------------------------------------")
             l2a_paths = [ f.path for f in os.scandir(l2_masked_image_dir) if f.is_file() ]
             if len(l2a_paths) == 0:
-                raise FileNotFoundError("No images found in {}.".format(l2_masked_image_dir))
+                raise FileNotFoundError("No images found in {}".format(l2_masked_image_dir))
 
             log.info("Sorting masked L2A image list by time stamp.")
             images = \
@@ -401,32 +407,42 @@ def rolling_detection(config_path,
                              " dated image in your composite/ folder.")
                 sys.exit(1)
 
+            #test - this works
+            #ds = gdal.Open("/scratch/clcr/shared/heiko/matogrosso/21LUG/composite/composite_20191007T141051.tif")
+            #pyeo.raster_manipulation.create_matching_dataset(ds, "/scratch/clcr/shared/heiko/matogrosso/21LUG/composite/test.tif", datatype = gdal.GDT_Byte)
+            #ds = None
+
             for image in images:
                 log.info("Change detection between images:")
                 log.info("  Latest composite      : {}".format(latest_composite_path))
                 log.info("  Change detection image: {}".format(image))
                 # new_class_image should have the before and after dates/timestamps in the filename
-                before_timestamp = pyeo.filesystem_utilities.get_sen_2_image_timestamp(latest_composite_name)
-                after_timestamp = pyeo.filesystem_utilities.get_sen_2_image_timestamp(os.path.basename(image))
-                processing_baseline_number = os.path.basename(image).split("_")[3] #Nxxyy: the PDGS Processing Baseline number (e.g. N0204)
-                orbit = os.path.basename(image).split("_")[4] #ROOO: Relative Orbit number (R001 - R143)
-                tile = os.path.basename(image).split("_")[5] # Tile ID number (e.g. T21MVM)
-                new_class_image = os.path.join(categorised_image_dir,
-                                               "class_{}_{}_{}_{}_{}.tif".format(before_timestamp, \
-                                               processing_baseline_number, orbit, tile, after_timestamp))
-                if build_prob_image:
-                    new_prob_image = os.path.join(probability_image_dir,
-                                               "prob_{}_{}_{}_{}_{}.tif".format(before_timestamp, \
-                                               processing_baseline_number, orbit, tile, after_timestamp))
-                else:
-                    new_prob_image = None
-
-                pyeo.classification.change_from_composite(os.path.join(l2_masked_image_dir, image), 
-                                                          latest_composite_path, 
-                                                          model_path, 
-                                                          new_class_image, 
-                                                          new_prob_image,
-                                                          skip_existing=True)
+                before_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(latest_composite_name)
+                after_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(image))
+                # only classify if the image is more recent than the latest composite
+                if before_timestamp < after_timestamp:
+                    before_timestamp_str = pyeo.filesystem_utilities.get_sen_2_image_timestamp(latest_composite_name)
+                    after_timestamp_str = pyeo.filesystem_utilities.get_sen_2_image_timestamp(os.path.basename(image))
+                    processing_baseline_number = os.path.basename(image).split("_")[3] #Nxxyy: the PDGS Processing Baseline number (e.g. N0204)
+                    orbit = os.path.basename(image).split("_")[4] #ROOO: Relative Orbit number (R001 - R143)
+                    tile = os.path.basename(image).split("_")[5] # Tile ID number (e.g. T21MVM)
+                    new_class_image = os.path.join(categorised_image_dir,
+                                                   "class_{}_{}_{}_{}_{}.tif".format(before_timestamp_str,
+                                                   processing_baseline_number, orbit, tile, after_timestamp_str))
+                    if build_prob_image:
+                        new_prob_image = os.path.join(probability_image_dir,
+                                                      "prob_{}_{}_{}_{}_{}.tif".format(before_timestamp_str,
+                                                      processing_baseline_number, orbit, tile, after_timestamp_str))
+                    else:
+                        new_prob_image = None
+                    pyeo.classification.change_from_composite(os.path.join(l2_masked_image_dir, image), 
+                                                              latest_composite_path, 
+                                                              model_path, 
+                                                              new_class_image, 
+                                                              new_prob_image,
+                                                              skip_existing=False,
+                                                              apply_mask=False)
+            log.info("End of classification.")
 
             #TODO: test this bit
             log.info("Creating confidence layers based on {} repeated subsequent change detections.".format(n_confirmations))
@@ -452,7 +468,8 @@ def rolling_detection(config_path,
 
                 verification_raster = os.path.join(probability_image_dir, \
                                                    "conf_{}_{}_{}_n{}.tif".format(before_timestamp, tile_id, after_timestamp, n_confirmations))
-                pyeo.raster_manipulation.verify_change_detections(subsequent_images, verification_raster, [4,5], buffer_size=0, out_resolution=None)
+                pyeo.raster_manipulation.verify_change_detections(subsequent_images, verification_raster, [5], buffer_size=0, out_resolution=None)
+
             log.info("Confidence layers done.")
 
         # ------------------------------------------------------------------------
@@ -559,7 +576,31 @@ def rolling_detection(config_path,
                 latest_composite_path = new_composite_path
 
         # ------------------------------------------------------------------------
-        # Step 5: Free up disk space by deleting all downloaded Sentinel-2 images and intermediate processing steps
+        # Step 5: Create quicklooks for fast visualisation and quality assurance of output
+        # ------------------------------------------------------------------------
+
+        if do_quicklooks or do_all:
+            dirs_for_quicklooks = [composite_dir, l2_masked_image_dir, categorised_image_dir, probability_image_dir]
+            for main_dir in dirs_for_quicklooks: 
+                files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif")]
+                if len(files) == 0:
+                    log.warning("No images found in {}.".format(main_dir))
+                else:    
+                    for f in files:
+                        log.info("Creating quicklook image from: {}".format(f))
+                        quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
+                        log.info("                           at: {}".format(quicklook_path))
+                        pyeo.raster_manipulation.create_quicklook(f, 
+                                                                  quicklook_path,
+                                                                  width=512, 
+                                                                  height=512, 
+                                                                  format="PNG", 
+                                                                  bands=[3,2,1], 
+                                                                  nodata=0)
+
+
+        # ------------------------------------------------------------------------
+        # Step 6: Free up disk space by deleting all downloaded Sentinel-2 images and intermediate processing steps
         # ------------------------------------------------------------------------
 
         # Build new composite
@@ -623,6 +664,8 @@ if __name__ == "__main__":
     parser.add_argument('-u', '--update', dest='do_update', action='store_true', default=False,
                         help="Builds a new cloud-free composite in composite/ from the latest image and mask"
                              " in images/merged")
+    parser.add_argument('-q', '--quicklooks', dest='do_quicklooks', action='store_true', default=True,
+                        help="Creates quicklooks for all composites, L2A change images, classified images and probability images.")
     parser.add_argument('-r', '--remove', dest='do_delete', action='store_true', default=False,
                         help="Not implemented. If present, removes all images in images/ to save space.")
 
