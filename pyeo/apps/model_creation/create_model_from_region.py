@@ -5,7 +5,7 @@ import argparse
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Produces a trained model from a filder containing '
+    parser = argparse.ArgumentParser(description='Produces a trained model from a folder containing '
                                                  'rasters and shapefiles')
     parser.add_argument("region_path", type=str, action='store',
                         help="Path to the folder containing the region data")

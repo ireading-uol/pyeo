@@ -83,6 +83,10 @@ def change_from_composite(image_path, composite_path, model_path, class_out_path
         If True, uses the .msk file corresponding to the image at image_path to skip any invalid pixels. Default False.
     """
 
+    if skip_existing:
+        if os.path.exists(class_out_path):
+            log.info(" Classified image exists. Skipping. {}".format(class_out_path))
+            return
     if os.path.exists(composite_path):
         if os.path.exists(image_path):
             with TemporaryDirectory(dir=os.getcwd()) as td:

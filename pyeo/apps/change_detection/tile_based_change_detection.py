@@ -407,11 +407,6 @@ def rolling_detection(config_path,
                              " dated image in your composite/ folder.")
                 sys.exit(1)
 
-            #test - this works
-            #ds = gdal.Open("/scratch/clcr/shared/heiko/matogrosso/21LUG/composite/composite_20191007T141051.tif")
-            #pyeo.raster_manipulation.create_matching_dataset(ds, "/scratch/clcr/shared/heiko/matogrosso/21LUG/composite/test.tif", datatype = gdal.GDT_Byte)
-            #ds = None
-
             for image in images:
                 log.info("Change detection between images:")
                 log.info("  Latest composite      : {}".format(latest_composite_path))
@@ -440,7 +435,7 @@ def rolling_detection(config_path,
                                                               model_path, 
                                                               new_class_image, 
                                                               new_prob_image,
-                                                              skip_existing=False,
+                                                              skip_existing=True,
                                                               apply_mask=False)
             log.info("End of classification.")
 
@@ -460,14 +455,21 @@ def rolling_detection(config_path,
             for index, image in enumerate(class_image_paths, start=n_confirmations):
                 # submit all images from 0...n_confirmations to first round of verification,
                 #   then increase the counter by one  
-                subsequent_images = class_image_paths[index : index+n_confirmations]
+                subsequent_images = class_image_paths[index-n_confirmations : index]
                 # build output file name from earliest and latest time stamp
                 #   (new_class_image should have the before and after dates/timestamps in the filename)
                 before_timestamp = pyeo.filesystem_utilities.get_sen_2_image_timestamp(os.path.basename(subsequent_images[0]))
-                after_timestamp = pyeo.filesystem_utilities.get_sen_2_image_timestamp(os.path.basename(subsequent_images[n_confirmations]))
+                after_timestamp = pyeo.filesystem_utilities.get_sen_2_image_timestamp(os.path.basename(subsequent_images[-1]))
+
+                log.info("  subsequent images:")
+                for im in subsequent_images: 
+                    log.info("  {}".format(im))
+                log.info("  earliest time stamp: {}".format(before_timestamp))
+                log.info("  latest   time stamp: {}".format(after_timestamp))
 
                 verification_raster = os.path.join(probability_image_dir, \
                                                    "conf_{}_{}_{}_n{}.tif".format(before_timestamp, tile_id, after_timestamp, n_confirmations))
+                log.info("  verification raster file to be created: {}".format(verification_raster))
                 pyeo.raster_manipulation.verify_change_detections(subsequent_images, verification_raster, [5], buffer_size=0, out_resolution=None)
 
             log.info("Confidence layers done.")
@@ -595,7 +597,8 @@ def rolling_detection(config_path,
                                                                   width=512, 
                                                                   height=512, 
                                                                   format="PNG", 
-                                                                  bands=[3,2,1]
+                                                                  bands=[3,2,1],
+                                                                  scale_factors=[[0,2000,0,255]]
                                                                   )
 
 

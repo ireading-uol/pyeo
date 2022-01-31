@@ -2902,7 +2902,7 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     bands = 1
     projection = masks[0].GetProjection()
     out_raster = create_new_image_from_polygon(combined_polygon, out_path, x_res, y_res,
-                                               bands, projection, datatype=gdal.GDT_Byte, nodata=0)
+                                               bands, projection, datatype=gdal.GDT_Byte)
     out_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write)
     out_array = out_array.squeeze() # This here to account for unaccountable extra dimension Windows patch adds
     out_array[:, :] = 1
@@ -2922,11 +2922,10 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
         if mask_index == 0:
             out_view[:,:] = in_mask_view
         else:
-            out_mask_view[:, :] = np.nansum(out_view, in_mask_view, dtype=np.uint8)
+            out_view[:, :] = np.add(out_view, in_mask_view, dtype=np.uint8)
         in_mask_view = None
         out_view = None
         in_mask_array = None
-        in_mask = None
     out_array = None
     out_raster = None
     return out_path
@@ -2960,12 +2959,11 @@ def verify_change_detections(class_map_paths, out_path, classes_of_interest, buf
     """
 
     #TODO: test this function
-    log.info("Producing confidence layer.")
+    log.info("Producing confidence layer from subsequent detections for classes: {}".format(classes_of_interest))
     # create masks from the classes of interest
     with TemporaryDirectory(dir=os.getcwd()) as td:
         class_mask_paths = [ create_mask_from_class_map(f, \
-                             os.path.join(td, f.split(sep=".")[0]+"_temp.msk") , classes_of_interest, \
-                             buffer_size=0, out_resolution=None) for f in class_map_paths]
+                             os.path.join(td, os.path.basename(f).split(sep=".")[0]+"_temp.msk") , classes_of_interest) for f in class_map_paths]
         # combine masks from n subsequent dates into a confirmed change detection image
         add_masks(class_mask_paths, out_path, geometry_func="union")
     return out_path
@@ -3362,7 +3360,36 @@ def apply_fmask(in_safe_dir, out_file, fmask_command="fmask_sentinel2Stacked.py"
         if nextline == '' and fmask_proc.poll() is not None:
             break
 
-def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG", bands=[1,2,3], nodata=None):
+def scale_to_uint8(x, percentiles=[0,100]):
+    '''
+    Scales an array to the range from 0-255 and converts the data type to uint8.
+    NaN values will be ignored.
+
+    Args:
+      x = input array
+      percentiles = list of length 2 of percentiles for trimming the histogram (0-100)
+
+    Returns:
+      Scaled array of uint8 data type
+    '''
+    x = np.float32(x)
+    amin = np.nanpercentile(x, percentiles[0])
+    amax = np.nanpercentile(x, percentiles[1])
+    anewmin = 0.0
+    anewmax = 255.0
+    x[x<amin] = amin
+    x[x>amax] = amax
+    if amin == amax:
+        if amin < 0:
+            amin = 0:
+        if amin >255:
+            amin = 255:
+        xscaled = np.full_like(x, fill_value=np.uint8(amin), dtype=np.uint8)
+    else:
+        xscaled = (x - amin) / (amax - amin) * (anewmax - anewmin) + anewmin
+    return(xscaled.astype(np.uint8))
+
+def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG", bands=[1,2,3], nodata=None, scale_factors=None):
     """
     Creates a quicklook image of reduced size from an input GDAL object and saves it to out_raster_path.
 
@@ -3393,10 +3420,16 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
     # heightPct --- height of the output raster in percentage (100 = original height)
     # xRes --- output horizontal resolution
     # yRes --- output vertical resolution
+    #palette = "rgb"
     image = gdal.Open(in_raster_path)
     if len(bands) > image.RasterCount:
         log.warning("Fewer than 3 bands. Visualising only band 1.")
         bands=[1]
+        #palette = "gray"
+        if scale_factors is None:
+            scale_factors = [[0,14,0,255]] # this is specific to a classified image with 14 classes
+    if scale_factors is None:
+        scale_factors = [[0,2000,0,255]] # this is specific to Sentinel-2
     kwargs = {
         'format': format,
         'outputType': gdal.GDT_Byte,
@@ -3404,6 +3437,8 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         'noData' : nodata,
         'width' : width,
         'height' : height,
+        'scaleParams' : scale_factors,
+        #'rgbExpand' : palette,
     }
     image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
     image = None

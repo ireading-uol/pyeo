@@ -20,7 +20,7 @@ provides a sample of that polygon's class, with every value of that pixel being 
 At present, the model created is a balanced random forest classifier; there are plans to expand the function
 to take the model as an augment, but these are not yet implemented.
 
-You can call this script from the command with a .ini file as an argument"""
+You can call this script from the command line with a .ini file as an argument"""
 
 import pyeo.classification
 import pyeo.filesystem_utilities
