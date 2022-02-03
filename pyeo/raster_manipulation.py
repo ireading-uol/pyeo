@@ -3559,6 +3559,52 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
 
 
 
+def combine_date_maps(date_image_paths, output_product):
+    '''
+    Combines all change date layers into one output raster with two layers:
+      (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
+      (2) pixels show the number of change detection dates (summed up over all change images in the folder)
+
+    Parameters
+    ----------
+    date_image_paths : list of strings
+        Containing the full directory paths to the input files with the detection dates as pixel values in UInt32 format
+    output_product : string
+        The string containing the full directory path to the output file for the 2-layer raster file
+
+    Returns
+    -------
+    output_product : string
+        The string containing the full directory path to the output file for the 2-layer raster file
+    '''
+
+    log = logging.getLogger(__name__)
+    try:
+        date_images = [gdal.Open(path) for path in date_image_paths]
+    except FileNotFoundError as e:
+        log.error("No date images found: {} {}".format(date_image_paths, e))
+        return
+
+    out_raster = create_matching_dataset(date_image_paths[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
+    # Squeeze() to account for unaccountable extra dimension Windows patch adds
+    out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write).squeeze()
+    out_raster_array[:, :, :] = 0 # [bands, y, x]
+    for index, date_image in enumerate(date_images):
+        date_array = date_image.GetVirtualMemArray().squeeze()
+        out_raster_array[0, :, :] = np.minimum(out_raster_array[0, :, :], date_array, out=out_raster_array[0, :, :], \
+                                               where=np.where(np.add(out_raster_array[0, :, :], date_array) > 0))
+        date_mask = np.where(date_array > 0, 1, 0)
+        out_raster_array[1, :, :] = np.add(out_raster_array[1, :, :], date_mask, out=out_raster_array[1, :, :])
+        date_array = None
+        date_mask
+    out_raster_array = None
+    out_raster = None
+    date_images = None
+
+    return output_product
+
+
+
 
 
 

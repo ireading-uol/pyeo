@@ -501,7 +501,8 @@ def autochunk(dataset, mem_limit=None):
 
 
 def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
-                       apply_mask=False, out_type="GTiff", num_chunks=10):
+                       apply_mask=False, out_type="GTiff", num_chunks=10, skip_existing=False)
+):
     """
     Classifies every file ending in .tif in in_dir using model at model_path. Outputs are saved
     in class_out_dir and prob_out_dir, named [input_name]_class and _prob, respectively.
@@ -525,8 +526,10 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
         The raster format of the class image. Defaults to "GTiff" (geotif). See gdal docs for valid datatypes.
     num_chunks : int, optional
         The number of chunks to break each image into for processing. See :py:func:`classify_image`
-
+    skip_existing : boolean, optional
+        If True, skips the classification if the output file already exists.
     """
+
     log = logging.getLogger(__name__)
     log.info("Classifying files in {}".format(in_dir))
     log.info("Class files saved in {}".format(class_out_dir))
@@ -539,7 +542,8 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
         else:
             prob_out_path = None
         classify_image(image_path, model_path, class_out_path, prob_out_path,
-                       apply_mask, out_type, num_chunks)
+                       apply_mask, out_type, num_chunks, skip_existing)
+)
 
 
 def reshape_raster_for_ml(image_array):

@@ -395,14 +395,16 @@ def rolling_detection(config_path,
                                                    prob_out_dir = None, 
                                                    apply_mask=False, 
                                                    out_type="GTiff", 
-                                                   num_chunks=4)
+                                                   num_chunks=4,
+                                                   skip_existing=skip_existing)
             pyeo.classification.classify_directory(l2_masked_image_dir,
                                                    model_path,
                                                    categorised_image_dir,
                                                    prob_out_dir = None, 
                                                    apply_mask=False, 
                                                    out_type="GTiff", 
-                                                   num_chunks=4)
+                                                   num_chunks=4,
+                                                   skip_existing=skip_existing)
             log.info("End of classification.")
 
         # ------------------------------------------------------------------------
@@ -415,12 +417,14 @@ def rolling_detection(config_path,
             log.info("Creating change layers based on {} repeated subsequent change detections.".format(n_confirmations))
             log.info("---------------------------------------------------------------")
             log.info("Change of interest is from any of the classes {} to any of the classes {}.".format(from_classes, to_classes))
-            class_image_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() and f.name.endswith(".tif") ]
+
+            # get all image paths in the classification maps directory except the class composites
+            class_image_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() and f.name.endswith(".tif") \
+                                  and not "composite_" in f.name ]
             if len(class_image_paths) == 0:
                 raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
 
             # sort class images by image acquisition date
-            #TODO: drop the composite classifications from this list
             class_image_paths = list(filter(pyeo.filesystem_utilities.get_image_acquisition_time, class_image_paths))
             class_image_paths.sort(key=lambda x: pyeo.filesystem_utilities.get_image_acquisition_time(x))
             for index, image in enumerate(class_image_paths):
@@ -471,11 +475,25 @@ def rolling_detection(config_path,
                                                                 change_from,
                                                                 change_to)
 
-            #TODO: combine all change layers into one layer with the earliest change detection date and one layer with the confidence count
+            # combine all change layers into one output raster with two layers:
+            #   (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
+            #   (2) pixels show the number of change detection dates (summed up over all change images in the folder)
+            date_image_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() and f.name.endswith(".tif") \
+                                 and "change_" in f.name ]
+            if len(date_image_paths) == 0:
+                raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
 
+            before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
+            after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[-1]))
+            output_product = os.path.join(probability_image_dir,
+                                          "report_{}_{}_{}.tif".format(
+                                          before_timestamp.strftime("%Y%m%dT%H%M%S"),
+                                          tile_id,
+                                          after_timestamp.strftime("%Y%m%dT%H%M%S"))
+                                          )
+            pyeo.raster_manipulation.combine_date_maps(date_image_paths, output_product)
 
-
-            log.info("Change layers done.")
+            log.info("Change date layers done and output product aggregated.")
 
         # ------------------------------------------------------------------------
         # Step 5: Update the baseline composite with the reflectance values of only the changed pixels.
