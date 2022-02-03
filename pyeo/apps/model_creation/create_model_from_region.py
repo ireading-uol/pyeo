@@ -20,6 +20,8 @@ if __name__ == "__main__":
     log = pyeo.filesystem_utilities.init_log("model.log")
 
     log.info("***MODEL CREATION START***")
+    log.info("Region path: {}".format(args.region_path))
+    log.info("Output path for the model: {}".format(args.out_path))
 
     pyeo.classification.create_model_for_region(args.region_path, args.out_path,
                                                 args.training_class.rsplit('.')[0] +"_scores.txt",

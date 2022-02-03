@@ -29,18 +29,20 @@ import logging
 import os
 from tempfile import TemporaryDirectory
 
+from osgeo import gdalconst
 from osgeo import gdal
+from osgeo import osr
+from osgeo import ogr
 import joblib
 import numpy as np
-from osgeo import osr
 from scipy import sparse as sp
+import shutil
 from sklearn import ensemble as ens
 from sklearn.externals import joblib as sklearn_joblib
 from sklearn.model_selection import cross_val_score
 
 from pyeo.coordinate_manipulation import get_local_top_left
 from pyeo.filesystem_utilities import get_mask_path
-
 from pyeo.raster_manipulation import stack_images, create_matching_dataset, apply_array_image_mask, get_masked_array
 
 import pyeo.windows_compatability
@@ -104,7 +106,8 @@ def change_from_composite(image_path, composite_path, model_path, class_out_path
     return
 
 
-def classify_image(image_path, model_path, class_out_path, prob_out_path=None, apply_mask=False, out_type="GTiff", num_chunks=4, nodata=0, skip_existing = False):
+def classify_image(image_path, model_path, class_out_path, prob_out_path=None, apply_mask=False, \
+                   out_format="GTiff", num_chunks=4, nodata=0, skip_existing = False):
     """
 
     Produces a class map from a raster and a model.
@@ -155,7 +158,6 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
             return class_out_path
     log.info("Classifying file: {}".format(image_path))
     log.info("Saved model     : {}".format(model_path))
-    log.info("Image file exists? {}".format(os.path.exists(image_path)))
     if not os.path.exists(image_path):
         log.error("File not found: {}".format(image_path))
     if not os.path.exists(model_path):
@@ -165,7 +167,6 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     except RuntimeError as e:
         log.info("Exception: {}".format(e))
         exit(1)
-    log.info("Image file opened: {}".format(image_path))
     if num_chunks == None:
         log.info("No chunk size given, attempting autochunk.")
         num_chunks = autochunk(image)
@@ -178,10 +179,7 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     except TypeError as e:
         log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
         model = joblib.load(model_path)
-    log.info("Create matching dataset from type {}".format(type(image)))
-    #TODO: it crashes here - Why does the following line give 'False' as output?
-    log.info("Format {}".format(out_type))
-    class_out_image = create_matching_dataset(image, class_out_path, format=out_type, datatype=gdal.GDT_Byte)
+    class_out_image = create_matching_dataset(image, class_out_path, format=str(out_format), datatype=gdal.GDT_Byte)
     log.info("Created classification image file: {}".format(class_out_path))
     if prob_out_path:
         try:
@@ -204,20 +202,19 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
 
     # Mask out missing values from the classification
     # at this point, image_array has dimensions [band, y, x]
-    log.info("Reshaping image from GDAL to Scikit-Learn dimensions")
     image_array = reshape_raster_for_ml(image_array)
     # Now it has dimensions [x * y, band] as needed for Scikit-Learn
 
     # Determine where in the image array there are no missing values in any of the bands (axis 1)
-    log.info("Finding good pixels without missing values")
-    log.info("image_array.shape = {}".format(image_array.shape))
+    #log.info("Finding good pixels without missing values")
+    #log.info("image_array.shape = {}".format(image_array.shape))
     n_samples = image_array.shape[0]  # gives x * y dimension of the whole image
     good_mask = np.all(image_array != nodata, axis=1)
     good_sample_count = np.count_nonzero(good_mask)
-    log.info("No. good values: {}".format(good_sample_count))
+    #log.info("Number of good values: {}".format(good_sample_count))
     #if good_sample_count <= 0.5*len(good_mask):  # If the images is less than 50% good pixels, do filtering
     if 1 == 0:  # Removing the filter until we fix the classification issue with it
-        log.info("Filtering nodata values")
+        #log.info("Filtering nodata values")
         good_indices = np.nonzero(good_mask)
         good_samples = np.take(image_array, good_indices, axis=0).squeeze()
         n_good_samples = len(good_samples)
@@ -226,8 +223,8 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
         good_samples = image_array
         good_indices = range(0, n_samples)
         n_good_samples = n_samples
-    log.info("   All  samples: {}".format(n_samples))
-    log.info("   Good samples: {}".format(n_good_samples))
+    #log.info("   All  samples: {}".format(n_samples))
+    #log.info("   Good samples: {}".format(n_good_samples))
     classes = np.full(n_good_samples, nodata, dtype=np.ubyte)
     if prob_out_path:
         probs = np.full((n_good_samples, model.n_classes_), nodata, dtype=np.float32)
@@ -238,29 +235,22 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     # The chunks iterate over all values in the array [x * y, bands] always with 8 bands per chunk
     for chunk_id in range(num_chunks):
         offset = chunk_id * chunk_size
-        # process the residual pixels with the last chunk
         if chunk_id == num_chunks - 1:
             chunk_size = chunk_size + chunk_resid
         log.info("   Classifying chunk {} of size {}".format(chunk_id+1, chunk_size))
         chunk_view = good_samples[offset : offset + chunk_size]
         #indices_view = good_indices[offset : offset + chunk_size]
-        #log.info("   Creating out_view")
-        out_view = classes[offset : offset + chunk_size]  # dimensions [chunk_size]
-        #log.info("   Calling model.predict")
+        out_view = classes[offset : offset + chunk_size]
         chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
         out_view[:] = model.predict(chunk_view)
-
         if prob_out_path:
             log.info("   Calculating probabilities")
             prob_view = probs[offset : offset + chunk_size, :]
             prob_view[:, :] = model.predict_proba(chunk_view)
 
-    #log.info("   Creating class array of size {}".format(n_samples))
     class_out_array = np.full((n_samples), nodata)
     for i, class_val in zip(good_indices, classes):
         class_out_array[i] = class_val
-
-    #log.info("   Creating GDAL class image")
     class_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :] = \
         reshape_ml_out_to_raster(class_out_array, image.RasterXSize, image.RasterYSize)
 
@@ -277,8 +267,17 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
             reshape_prob_out_to_raster(prob_out_array, image.RasterXSize, image.RasterYSize)
 
     class_out_image = None
+    class_out_array = None
     prob_out_image = None
+    prob_out_array = None
+    # verify that the output file(s) have been created
+    if not os.path.exists(class_out_path):
+        log.error("File not found: {}".format(class_out_path))
+        sys.exit(1)
     if prob_out_path:
+        if not os.path.exists(prob_out_path):
+            log.error("File not found: {}".format(prob_out_path))
+            sys.exit(1)
         return class_out_path, prob_out_path
     else:
         return class_out_path
@@ -533,7 +532,7 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
     log.info("Class files saved in {}".format(class_out_dir))
     log.info("Prob. files saved in {}".format(prob_out_dir))
     for image_path in glob.glob(in_dir+r"/*.tif"):
-        image_name = os.path.basename(image_path).split('.')[0]
+        image_name = os.path.basename(image_path)[:-4]
         class_out_path = os.path.join(class_out_dir, image_name+"_class.tif")
         if prob_out_dir:
             prob_out_path = os.path.join(prob_out_dir, image_name+"_prob.tif")
@@ -693,13 +692,26 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 5, attri
             min_samples_leaf=2, min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
 
     """
-    # This could be optimised by pre-allocating the training array. but not now.
+    #TODO: This could be optimised by pre-allocating the training array.
     learning_data = None
     classes = None
+    log.info("Collecting training data from all tif/shp file pairs.")
     for training_image_file_path in training_image_file_paths:
+        #check whether both the tiff file and the shapefile exist
         training_image_folder, training_image_name = os.path.split(training_image_file_path)
         training_image_name = training_image_name[:-4]  # Strip the file extension
-        shape_path = os.path.join(training_image_folder, training_image_name, training_image_name + '.shp')
+        shape_path_name = training_image_name + '.shp'
+        # find the full path to the shapefile, this can be in a subdirectory
+        shape_paths = [ f.path for f in os.scandir(training_image_folder) \
+                        if f.is_file() and os.path.basename(f) == shape_path_name ]
+        if len(shape_paths) == 0:
+            log.error("{} not found.".format(shape_path_name))
+            continue
+        if len(shape_paths) > 1:
+            log.warning("Several versions of {} exist. Using the first of these files.".format(shape_path_name))
+            for f in shape_paths:
+                log.info("  {}".format(f))
+        shape_path = shape_paths[0]
         this_training_data, this_classes = get_training_data(training_image_file_path, shape_path, attribute)
         if learning_data is None:
             learning_data = this_training_data
@@ -707,6 +719,9 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 5, attri
         else:
             learning_data = np.append(learning_data, this_training_data, 0)
             classes = np.append(classes, this_classes)
+    log.info("Training the random forest model.")
+    log.info("  Class labels: {}".format(np.unique(classes)))
+    log.info("  Learning data labels: {}".format(np.unique(learning_data)))
     model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
                                      min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
     model.fit(learning_data, classes)
@@ -731,6 +746,7 @@ def create_model_for_region(path_to_region, model_out, scores_out, attribute="CO
         The label of the field in the training shapefiles that contains the classification labels. Defaults to "CODE".
 
     """
+    log.info("Create model for region based on tif/shp file pairs: {}".format(path_to_region))
     image_glob = os.path.join(path_to_region, r"*.tif")
     image_list = glob.glob(image_glob)
     model, scores = create_trained_model(image_list, attribute=attribute)
@@ -826,42 +842,42 @@ def get_training_data(image_path, shape_path, attribute="CODE", shape_projection
     """
     # TODO: WRITE A TEST FOR THIS TOO; if this goes wrong, it'll go wrong
     # quietly and in a way that'll cause the most issues further on down the line
+    if not os.path.exists(image_path):
+        log.error("{} not found.".format(image_path))
+        sys.exit(1) 
+    if not os.path.exists(shape_path):
+        log.error("{} not found.".format(shape_path))
+        sys.exit(1) 
+    log.info("Get training data from {}".format(image_path))
+    log.info("                   and {}".format(shape_path))
     FILL_VALUE = -9999
     with TemporaryDirectory() as td:
-        # Step 1; rasterise shapefile into .tif of class values
-        shape_projection = osr.SpatialReference()
-        shape_projection.ImportFromEPSG(shape_projection_id)
+        shape_raster_path = os.path.join(td, os.path.basename(shape_path)[:-4]+"_rasterised")
+        log.info("Shape raster path {}".format(shape_raster_path))
+        shape_raster_path = shapefile_to_raster(shape_path, image_path, shape_raster_path, verbose=False, attribute=attribute, nodata=0)
         image = gdal.Open(image_path)
-        image_gt = image.GetGeoTransform()
-        x_res, y_res = image_gt[1], image_gt[5]
-        ras_path = os.path.join(td, "poly_ras")
-        ras_params = gdal.RasterizeOptions(
-            noData=0,
-            attribute=attribute,
-            xRes=x_res,
-            yRes=y_res,
-            outputType=gdal.GDT_Int16,
-            outputSRS=shape_projection
-        )
-        # This produces a rasterised geotiff that's right, but not perfectly aligned to pixels.
-        # This can probably be fixed.
-        gdal.Rasterize(ras_path, shape_path, options=ras_params)
-        rasterised_shapefile = gdal.Open(ras_path)
+        rasterised_shapefile = gdal.Open(shape_raster_path)
         shape_array = rasterised_shapefile.GetVirtualMemArray()
-        local_x, local_y = get_local_top_left(image, rasterised_shapefile)
         shape_sparse = sp.coo_matrix(np.asarray(shape_array).squeeze())
         y, x, features = sp.find(shape_sparse)
+        log.info("{} bands in image file".format(image.RasterCount))
+        log.info("{} features in shapefile".format(len(features)))
+        log.info("Image raster x size: {}".format(image.RasterXSize))
+        log.info("Image raster y size: {}".format(image.RasterYSize))
+        log.info("Shape raster x size: {}".format(rasterised_shapefile.RasterXSize))
+        log.info("Shape raster y size: {}".format(rasterised_shapefile.RasterYSize))
         training_data = np.empty((len(features), image.RasterCount))
         image_array = image.GetVirtualMemArray()
         image_view = image_array[:,
-                    local_y: local_y + rasterised_shapefile.RasterYSize,
-                    local_x: local_x + rasterised_shapefile.RasterXSize
+                    0 : rasterised_shapefile.RasterYSize,
+                    0 : rasterised_shapefile.RasterXSize
                     ]
         for index in range(len(features)):
             training_data[index, :] = image_view[:, y[index], x[index]]
         image_view = None
         image_array = None
         shape_array = None
+        image = None
         rasterised_shapefile = None
         return training_data, features
 
@@ -920,4 +936,251 @@ def raster_reclass_binary(img_path, rcl_value, outFn, outFmt='GTiff', write_out=
 
     return in_array
 
+
+def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, verbose=False, attribute="Class", nodata=0):
+    '''
+    Reads in a shapefile with polygons and produces a raster file that 
+    aligns with an input rasterfile (same corner coordinates, resolution, coordinate 
+    reference system and geotransform). Each pixel value in the output raster will
+    indicate the number from the shapefile based on the selected attribute column.
+    Based on https://gis.stackexchange.com/questions/151339/rasterize-a-shapefile-with-geopandas-or-fiona-python  
+
+    Parameters
+    ----------
+    shapefilename : str
+      String pointing to the input shapefile in ESRI format.
+
+    inraster_filename : str
+      String pointing to the input raster file that we want to align the output raster to.
+
+    outraster_filename : str
+      String pointing to the output raster file.
+
+    verbose : boolean
+      True or False. If True, additional text output will be printed to the log file.
+
+    attribute : str
+      Name of the column of the attribute table of the shapefile that will be burned into the raster.
+
+    nodata : int
+      No data value.
+
+
+    Returns:
+    ----------
+    outraster_filename : str
+    '''
+
+    log.info("Shapefile to Raster:")
+    log.info("  shapefile name {}".format(shapefilename))
+    log.info("  inrasterfile name {}".format(inraster_filename))
+    log.info("  outrasterfile name {}".format(outraster_filename))
+    with TemporaryDirectory() as td:
+        image = gdal.Open(inraster_filename)
+        image_gt = image.GetGeoTransform()
+        drv = ogr.GetDriverByName("ESRI Shapefile")
+        if drv is None:
+            log.error("  {} driver not available.".format("ESRI Shapefile"))
+            sys.exit(1)
+        inshape = drv.Open(shapefilename)
+        inlayer = inshape.GetLayer()
+        out_path = os.path.join(td, os.path.basename(outraster_filename))
+        x_min = image_gt[0]
+        y_max = image_gt[3]
+        x_max = x_min + image_gt[1] * image.RasterXSize
+        y_min = y_max + image_gt[5] * image.RasterYSize
+        x_res = image.RasterXSize
+        y_res = image.RasterYSize
+        pixel_width = image_gt[1]
+        target_ds = gdal.GetDriverByName('GTiff').Create(out_path, x_res, y_res, 1, gdal.GDT_Int16)
+        target_ds.SetGeoTransform((x_min, pixel_width, 0, y_min, 0, pixel_width))
+        band = target_ds.GetRasterBand(1)
+        band.SetNoDataValue(nodata)
+        band.FlushCache()
+        gdal.RasterizeLayer(target_ds, [1], inlayer, options=["ATTRIBUTE=CLASS"]) #.format(attribute)])
+        log.info("{} exists? {}".format(out_path, os.path.exists(out_path)))
+        log.info("{} exists? {}".format(os.path.dirname(shapefilename), os.path.exists(os.path.dirname(shapefilename))))
+        shutil.move(out_path, outraster_filename)
+        target_ds = None
+        image = None
+        inshape = None
+        inlayer = None
+    return outraster_filename
+
+def train_rf_model(raster, samples, modelfile, ntrees = 101, weights = None):
+    '''
+    Trains a random forest classifier model based on a raster file with bands
+      as features and a second raster file with training data, in which pixel
+      values indicate the class.
+
+    Args:
+      raster = filename and path to the raster file to be classified in tiff format
+      samples = filename and path to the raster file with the training samples 
+        as pixel values (in tiff format)
+      modelfile = filename and path to a pickle file to save the trained model to
+      ntrees (optional) = number of trees in the random forest, default = 101
+      weights (optional) = a list of integers giving weights for all classes. 
+        If not specified, all weights will be equal.
+    
+    Returns:
+      random forest model object
+    '''
+
+    # read in raster from geotiff
+    img_ds = io.imread(raster)
+
+    # convert to 16bit numpy array 
+    img = np.array(img_ds, dtype='int16')
+
+    # read in the training sample pixels 
+    roi_ds = io.imread(samples)   
+    roi = np.array(roi_ds, dtype='int8')  
+    
+    # read in the class labels
+    labels = np.unique(roi[roi > 0]) 
+    nclasses = labels.size # number of unique class values
+    print('The training data include {n} classes: {classes}'.format(n=nclasses, classes=labels))
+
+    # compose the X,Y pixel positions (feature dataset and training dataset)
+    # 0 = missing class value
+    X = img[roi > 0, :] 
+    Y = roi[roi > 0]     
+
+    # create a dictionary of class weights (class 1 has the weight 1, etc.)
+    w = dict() # create an empty dictionary
+    for i in range(nclasses): # iterate over all classes from 0 to nclasses-1
+      if weights == None:
+        w[i+1] = '1' # if not specified, set all weights to 1  
+      else:
+        if weights.size >= nclasses: # if enough weights are given, assign them
+          w[i+1] = weights[i] # assign the weights if specified by the user
+        else: # if fewer weights are defined than the number of classes, then set the remaining weights to 1
+          if i > weights.size:
+            w[i+1] = '1' # set weight to 1
+          else:
+            w[i+1] = weights[i] # assign the weights if specified by the user
+
+    # build the Random Forest Classifier 
+    # for more information: http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
+
+    rf = RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4, 
+                                min_samples_split = 2, min_samples_leaf = 1, max_features = 'auto', 
+                                bootstrap = True, oob_score = True, n_jobs = 1, random_state = None, verbose = True)  
+
+    # fit the model to the training data and the feature dataset
+    rf = rf.fit(X,Y)
+
+    # export the Random Forest model to a file
+    joblib.dump(rf, modelfile)
+    
+    # calculate the feature importances
+    importances = rf.feature_importances_
+    std = np.std([tree.feature_importances_ for tree in rf.estimators_], axis=0)
+    indices = np.argsort(importances)[::-1]
+
+    # Print the feature ranking
+    print("Feature ranking:")
+    for f in range(X.shape[1]):
+        print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
+
+    # Plot the feature importances of the forest
+    plt.figure()
+    plt.title("Feature importances")
+    plt.bar(range(X.shape[1]), importances[indices], color="r", yerr=std[indices], align="center")
+    plt.xticks(range(X.shape[1]), indices)
+    plt.xlim([-1, X.shape[1]])
+    plt.show()
+    
+    # Out-of-bag error rate as a function of number of trees:
+    oob_error = [] # define an empty list with pairs of values
+    
+    # Range of `n_estimators` values to explore.
+    mintrees = 30 # this needs to be a sensible minimum number to get reliable OOB error estimates
+    maxtrees = max(mintrees, ntrees) # go all the way to the highest number of trees
+    nsteps = 5 # number of steps to calculate OOB error rate for (saves time)
+    
+    # work out the error rate for each number of trees in the random forest
+    for i in range(mintrees, maxtrees + 1, round((maxtrees - mintrees)/nsteps)): # start, end, step
+      rf.set_params(n_estimators=i)
+      rf.fit(X, Y)
+      oob_error.append((i, 1 - rf.oob_score_))
+
+    # Plot OOB error rate vs. number of trees
+    xs, ys = zip(*oob_error)
+    plt.plot(xs, ys)
+    # plt.xlim(0, maxtrees)
+    plt.xlabel("n_estimators")
+    plt.ylabel("OOB error rate")
+    # plt.legend(loc="upper right")
+    plt.show()
+
+    return(rf) # returns the random forest model object
+
+def classify_rf(raster, modelfile, outfile, verbose = False):
+  '''
+  Reads in a pickle file of a random forest model and a raster file with feature layers,
+    and classifies the raster file using the model.
+
+  Args:
+    raster = filename and path to the raster file to be classified (in tiff uint16 format)
+    modelfile = filename and path to the pickled file with the random forest model in uint8 format
+    outfile = filename and path to the output file with the classified map in uint8 format
+    verbose (optional) = True or False. If True, provides additional printed output.
+  '''
+
+  # Read Data    
+  src = rasterio.open(raster, 'r')   
+  img = src.read()
+
+  if verbose:
+    print("img.shape = ", img.shape)
+
+  # get number of bands
+  n = img.shape[0]
+
+  if verbose:
+    print(n, " Bands")
+
+  # load your random forest model from the pickle file
+  clf = joblib.load(modelfile)    
+
+  # to work with SciKitLearn, we have to reshape the raster as an image
+  # this will change the shape from (bands, rows, columns) to (rows, columns, bands)
+  img = reshape_as_image(img)
+
+  # next, we have to reshape the image again into (rows * columns, bands)
+  # because that is what SciKitLearn asks for
+  new_shape = (img.shape[0] * img.shape[1], img.shape[2]) 
+
+  if verbose:
+    print("img[:, :, :n].shape = ", img[:, :, :n].shape)
+    print("new_shape = ", new_shape)
+
+  img_as_array = img[:, :, :n].reshape(new_shape)   
+
+  if verbose:
+    print("img_as_array.shape = ", img_as_array.shape)
+
+  # classify it
+  class_prediction = clf.predict(img_as_array) 
+
+  # and reshape the flattened array back to its original dimensions
+  if verbose:
+    print("class_prediction.shape = ", class_prediction.shape)
+    print("img[:, :, 0].shape = ", img[:, :, 0].shape)
+
+  class_prediction = np.uint8(class_prediction.reshape(img[:, :, 0].shape))
+
+  if verbose:
+    print(class_prediction.dtype)
+  
+  # save the image as a uint8 Geotiff file
+  tmpfile = rasterio.open(outfile, 'w', driver='Gtiff', 
+                          width=src.width, height=src.height,
+                          count=1, crs=src.crs, transform=src.transform, 
+                          dtype=np.uint8)
+
+  tmpfile.write(class_prediction, 1)
+
+  tmpfile.close()
 

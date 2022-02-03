@@ -1,7 +1,7 @@
 """
 rolling_composite_s2_change_detection
 -------------------------------------
-An app for providing continuous change detection. Runs the following algorithm
+An app for providing continuous change detection based on classification of forest cover. Runs the following algorithm
 
  Step 1: Create an initial cloud-free median composite from Sentinel-2 as a baseline map
 
@@ -9,10 +9,13 @@ An app for providing continuous change detection. Runs the following algorithm
          Preprocess all L1C images with Sen2Cor to make a cloud mask and atmospherically correct it to L2A.
          For each L2A image, get the directory paths of the separate band raster files.
 
- Step 3: For each L2A image, pair it with the composite baseline map and classify a change map using a saved model
+ Step 3: Classify each L2A image and the baseline composite
 
- Step 4: Update the baseline composite with the reflectance values of only the changed pixels.
-         Update last_date of the baseline composite.
+ Step 4: Pair up successive classified images with the composite baseline map and identify all pixels with the change between classes of interest, e.g. from class 1 to 2,3 or 8
+
+ Step 5: Update the baseline composite with the reflectance values of only the changed pixels. Update last_date of the baseline composite.
+
+ Step 6: Create quicklooks.
 
  """
 import shutil
@@ -75,6 +78,9 @@ def rolling_detection(config_path,
    
     pyeo.filesystem_utilities.create_folder_structure_for_tiles(tile_root_dir)
     log = pyeo.filesystem_utilities.init_log(os.path.join(tile_root_dir, "log", tile_id+"_log.txt"))
+    log.info("---------------------------------------------------------------")
+    log.info("---                  PROCESSING START                       ---")
+    log.info("---------------------------------------------------------------")
     log.info("Options:")
     if do_all:
         log.info("  --do_all")
@@ -359,7 +365,7 @@ def rolling_detection(config_path,
                                                             passwd=sen_pass, 
                                                             try_scihub_on_fail=True)
             log.info("---------------------------------------------------------------")
-            log.info("Image download and atmospheric correction for composite is complete.")
+            log.info("Image download and atmospheric correction for change detection images is complete.")
             log.info("---------------------------------------------------------------")
             log.info("Applying simple cloud and cloud shadow mask based on SCL files and stacking the masked band raster files.")
             l2a_paths = [ f.path for f in os.scandir(l2_image_dir) if f.is_dir() ]
@@ -374,26 +380,52 @@ def rolling_detection(config_path,
                                                           out_resolution=10)
 
         # ------------------------------------------------------------------------
-        # Step 3: For each L2A image, pair it with the composite baseline map and classify a change map using a saved model
+        # Step 3: Classify each L2A image and the baseline composite
         # ------------------------------------------------------------------------
-        #TODO: Check why in some classification image file names the later timestamp comes before the earlier timestamp(?)
         if do_all or do_classify:
             log.info("---------------------------------------------------------------")
-            log.info("Classify a change detection for each L2A image using a saved model")
+            log.info("Classify a land cover map for each L2A image and composite image using a saved model")
             log.info("---------------------------------------------------------------")
+            log.info("Model used: {}".format(model_path))
             if skip_existing:
                 log.info("Skipping existing classification images if found.") 
-            l2a_paths = [ f.path for f in os.scandir(l2_masked_image_dir) if f.is_file() ]
-            if len(l2a_paths) == 0:
-                raise FileNotFoundError("No images found in {}".format(l2_masked_image_dir))
+            pyeo.classification.classify_directory(composite_dir,
+                                                   model_path,
+                                                   categorised_image_dir,
+                                                   prob_out_dir = None, 
+                                                   apply_mask=False, 
+                                                   out_type="GTiff", 
+                                                   num_chunks=4)
+            pyeo.classification.classify_directory(l2_masked_image_dir,
+                                                   model_path,
+                                                   categorised_image_dir,
+                                                   prob_out_dir = None, 
+                                                   apply_mask=False, 
+                                                   out_type="GTiff", 
+                                                   num_chunks=4)
+            log.info("End of classification.")
 
-            log.info("Sorting masked L2A image list by time stamp.")
-            images = \
-                pyeo.filesystem_utilities.sort_by_timestamp(
-                    [image_name for image_name in os.listdir(l2_masked_image_dir) if image_name.endswith(".tif")],
-                    recent_first=False
-                )
+        # ------------------------------------------------------------------------
+        # Step 4: Pair up the class images with the composite baseline map 
+        # and identify all pixels with the change between classes of interest, e.g. from class 1 to 2,3 or 8.
+        # Currently this is being done together with the classification step.
+        # ------------------------------------------------------------------------
+        if do_all or do_classify:
+            log.info("---------------------------------------------------------------")
+            log.info("Creating change layers based on {} repeated subsequent change detections.".format(n_confirmations))
+            log.info("---------------------------------------------------------------")
+            log.info("Change of interest is from any of the classes {} to any of the classes {}.".format(from_classes, to_classes))
+            class_image_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() and f.name.endswith(".tif") ]
+            if len(class_image_paths) == 0:
+                raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
 
+            # sort class images by image acquisition date
+            class_image_paths = list(filter(pyeo.filesystem_utilities.get_image_acquisition_time, class_image_paths))
+            class_image_paths.sort(key=lambda x: pyeo.filesystem_utilities.get_image_acquisition_time(x))
+            for index, image in enumerate(class_image_paths):
+                log.info("{}: {}".format(index, image))
+
+            # find the latest available composite
             try:
                 latest_composite_name = \
                     pyeo.filesystem_utilities.sort_by_timestamp(
@@ -408,84 +440,45 @@ def rolling_detection(config_path,
                              "check that the earliest dated image in your images/merged folder is later than the earliest"
                              " dated image in your composite/ folder.")
                 sys.exit(1)
-
-            for image in images:
-                log.info("Change detection between images:")
-                log.info("  Latest composite      : {}".format(latest_composite_path))
-                log.info("  Change detection image: {}".format(image))
-                # new_class_image should have the before and after dates/timestamps in the filename
-                before_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(latest_composite_name)
-                after_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(image))
-                # only classify if the image is more recent than the latest composite
-                if before_timestamp < after_timestamp:
-                    before_timestamp_str = pyeo.filesystem_utilities.get_sen_2_image_timestamp(latest_composite_name)
-                    after_timestamp_str = pyeo.filesystem_utilities.get_sen_2_image_timestamp(os.path.basename(image))
-                    processing_baseline_number = os.path.basename(image).split("_")[3] #Nxxyy: the PDGS Processing Baseline number (e.g. N0204)
-                    orbit = os.path.basename(image).split("_")[4] #ROOO: Relative Orbit number (R001 - R143)
-                    tile = os.path.basename(image).split("_")[5] # Tile ID number (e.g. T21MVM)
-                    new_class_image = os.path.join(categorised_image_dir,
-                                                   "class_{}_{}_{}_{}_{}.tif".format(before_timestamp_str,
-                                                   processing_baseline_number, orbit, tile, after_timestamp_str))
-                    if build_prob_image:
-                        new_prob_image = os.path.join(probability_image_dir,
-                                                      "prob_{}_{}_{}_{}_{}.tif".format(before_timestamp_str,
-                                                      processing_baseline_number, orbit, tile, after_timestamp_str))
-                    else:
-                        new_prob_image = None
-                    pyeo.classification.change_from_composite(os.path.join(l2_masked_image_dir, image), 
-                                                              latest_composite_path, 
-                                                              model_path, 
-                                                              new_class_image, 
-                                                              new_prob_image,
-                                                              skip_existing=skip_existing,
-                                                              apply_mask=False)
-            log.info("End of classification.")
-
-            #TODO: test this bit
-            log.info("Creating confidence layers based on {} repeated subsequent change detections.".format(n_confirmations))
-            class_image_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() and f.name.endswith(".tif") ]
-            if len(class_image_paths) == 0:
-                raise FileNotFoundError("No categorised images found in {}.".format(categorised_image_dir))
-
-            # sort class images by change detection date (the second timestamp in the change detection image name)
-            class_image_paths = list(filter(pyeo.filesystem_utilities.get_change_detection_dates, class_image_paths))
-            class_image_paths.sort(key=lambda x: pyeo.filesystem_utilities.get_change_detection_dates(x)[1])
-
-            for index, image in enumerate(class_image_paths):
-                log.info("{}: {}".format(index, image))
-            for index, image in enumerate(class_image_paths):
-                log.info(pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(image))[1])
+            latest_class_composite_path = os.path.join(class_out_dir, os.path.basename(latest_composite_path)[-4]+"_class.tif")
+            if not os.path.exists(latest_class_composite_path):
+                log.critical("Latest class composite not found. The first time you run this script, you need to include the "
+                             "--build-composite flag to create a base composite to work off. If you have already done this,"
+                             "check that the earliest dated image in your images/merged folder is later than the earliest"
+                             " dated image in your composite/ folder. Then, you need to run the --classify option.")
+                sys.exit(1)
+            log.info("Latest class composite: {}".format(latest_class_composite_path))
 
             # combine masks from n subsequent dates into a confirmed change detection image
-            for index, image in enumerate(class_image_paths, start=n_confirmations):
-                # submit all images from 0...n_confirmations to first round of verification,
-                #   then increase the counter by one  
-                subsequent_images = class_image_paths[index-n_confirmations : index]
-                # build output file name from earliest and latest time stamp
-                #   (new_class_image should have the before and after dates/timestamps in the filename)
-                before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(subsequent_images[0]))[0]
-                after_timestamp  = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(subsequent_images[-1]))[1]
+            for index, image in enumerate(class_image_paths):
+                before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
+                after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(image))
+                log.info("  early time stamp: {}".format(before_timestamp))
+                log.info("  late  time stamp: {}".format(after_timestamp))
+                change_raster = os.path.join(probability_image_dir,
+                                             "change_{}_{}_{}_n{}.tif".format(
+                                             before_timestamp.strftime("%Y%m%dT%H%M%S"),
+                                             tile_id,
+                                             after_timestamp.strftime("%Y%m%dT%H%M%S"),
+                                             len(class_image_paths))
+                                             )
+                log.info("  Change raster file to be created: {}".format(change_raster))
+                # This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
+                # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
+                pyeo.raster_manipulation.change_from_class_maps(latest_class_composite_path,
+                                                                image,
+                                                                change_raster, 
+                                                                change_from,
+                                                                change_to)
 
-                log.info("  subsequent images:")
-                for im in subsequent_images: 
-                    log.info("  {}".format(im))
-                log.info("  earliest time stamp: {}".format(before_timestamp))
-                log.info("  latest   time stamp: {}".format(after_timestamp))
+            #TODO: combine all change layers into one layer with the earliest change detection date and one layer with the confidence count
 
-                verification_raster = os.path.join(probability_image_dir, \
-                                                   "conf_{}_{}_{}_n{}.tif".format( \
-                                                   before_timestamp.strftime("%Y%m%dT%H%M%S"), \
-                                                   tile_id, \
-                                                   after_timestamp.strftime("%Y%m%dT%H%M%S"), \
-                                                   n_confirmations) \
-                                                   )
-                log.info("  verification raster file to be created: {}".format(verification_raster))
-                pyeo.raster_manipulation.verify_change_detections(subsequent_images, verification_raster, [5], buffer_size=0, out_resolution=None)
 
-            log.info("Confidence layers done.")
+
+            log.info("Change layers done.")
 
         # ------------------------------------------------------------------------
-        # Step 4: Update the baseline composite with the reflectance values of only the changed pixels.
+        # Step 5: Update the baseline composite with the reflectance values of only the changed pixels.
         #         Update last_date of the baseline composite.
         # ------------------------------------------------------------------------
 
@@ -588,7 +581,7 @@ def rolling_detection(config_path,
                 latest_composite_path = new_composite_path
 
         # ------------------------------------------------------------------------
-        # Step 5: Create quicklooks for fast visualisation and quality assurance of output
+        # Step 6: Create quicklooks for fast visualisation and quality assurance of output
         # ------------------------------------------------------------------------
 
         if do_quicklooks or do_all:
@@ -691,11 +684,27 @@ if __name__ == "__main__":
     # TODO: bands and resolution can be made flexible BUT the bands need to be at the same resolution
     bands = ['B02', 'B03', 'B04', 'B08']
     resolution = '10m'
-    buffer_size = 30           #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
-    buffer_size_composite = 10 #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
-    max_image_number = 30      #maximum number of images to be downloaded for compositing, in order of least cloud cover
-    class_of_interest = 5      #depends on the model used in the classification - 5 is the forest loss class from Valentin's model
-    n_confirmations = 2        #number of subsequent change detections for verification purposes
-    skip_existing = False       # skip existing classification images
+    buffer_size = 30            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
+    buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
+    max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
+    from_classes = [1]          #find subsequent changes from any of these classes
+    to_classes = [2,3,4,5,7,11] #                        to any of these classes
+    skip_existing = True        # skip existing classification images
+
+    '''
+    e.g. classes in new matogrosso model	
+    1	primary forest
+    2	plantation forest
+    3	bare soil
+    4	crops
+    5	grassland
+    6	open water
+    7	burn scar
+    8	cloud
+    9	cloud shadow
+    10	haze
+    11	open woodland
+    '''
+
 
     rolling_detection(**vars(args))

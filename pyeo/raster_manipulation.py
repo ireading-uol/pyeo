@@ -141,7 +141,7 @@ from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from
 from pyeo.array_utilities import project_array
 from pyeo.filesystem_utilities import sort_by_timestamp, get_sen_2_tiles, get_l1_safe_file, get_sen_2_image_timestamp, \
     get_sen_2_image_tile, get_sen_2_granule_id, check_for_invalid_l2_data, get_mask_path, get_sen_2_baseline, \
-    get_safe_product_type, get_change_detection_dates, get_filenames, get_raster_paths
+    get_safe_product_type, get_change_detection_dates, get_filenames, get_raster_paths, get_image_acquisition_time
 from pyeo.exceptions import CreateNewStacksException, StackImagesException, BadS2Exception, NonSquarePixelException
 
 gdal.UseExceptions()
@@ -184,14 +184,11 @@ def create_matching_dataset(in_dataset, out_path, format='GTiff', bands=1, datat
     The default of bands=1 will be changed to match the input dataset in the next release of Pyeo
 
     """
-    #TODO: it does not recognise the string variable format here
-    log.info("Driver should be of type: {}".format('GTiff'))
     try:
-        driver = gdal.GetDriverByName('GTiff')
+        driver = gdal.GetDriverByName(format)
     except RunTimeError as e:
         log.error("GDAL.GetDriverByName error: {}".format(e))
         sys.exit(1)
-    log.info("Driver is of type: {}".format(type(driver)))
     if datatype is None:
         datatype = in_dataset.GetRasterBand(1).DataType
     out_dataset = driver.Create(out_path,
@@ -2184,7 +2181,7 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
 def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B02", "B03", "B04", "B08"], out_resolution=10):
     """
     For every .SAFE folder in l2_dir, creates a cloud-masked raster band for each selected band
-    based on the SCL layer.
+    based on the SCL layer. Applies a rough haze correction based on thresholing the blue band (B02<325).
 
     Parameters
     ----------
@@ -2224,7 +2221,11 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
                     stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
                     mask_path = get_mask_path(temp_file)
                     create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
-                    apply_mask_to_image(mask_path, temp_file, out_path)
+                    temp_file_2 = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_haze.tif"
+                    apply_mask_to_image(mask_path, temp_file, temp_file_2)
+                    mask_path_2 = get_mask_path(temp_file_2)
+                    create_mask_from_band(temp_file_2, mask_path_2, band=1, threshold=325, relation="smaller", buffer_size=buffer_size)
+                    apply_mask_to_image(mask_path_2, temp_file_2, out_path)
                     #shutil.move(temp_file, out_path)
                     resample_image_in_place(out_path, out_resolution)
 
@@ -2868,6 +2869,56 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
         buffer_mask_in_place(out_path, buffer_size)
     return out_path
 
+def create_mask_from_band(in_raster_path, out_path, band, threshold, relation="smaller", buffer_size=0, out_resolution=None):
+    """
+    Creates a multiplicative mask from a classification mask: 1 for each pixel containing one of classes_of_interest,
+    otherwise 0
+
+    Parameters
+    ----------
+    in_raster_path : str
+        Path to the raster file to build the mask from
+    out_path : str
+        Path to the new mask
+    band : number
+        Number of the band in the raster file to be used to create the mask, starting with band 1
+    threshold : number
+        Threshold to be applied when creating the mask
+    relation : str
+        Relationship to be applied to the threshold, can be that pixels are "smaller" or "greater" 
+        than the threshold to be set to 1.
+    buffer_size : int
+        If greater than 0, applies a buffer to the masked pixels of this size. Defaults to 0.
+    out_resolution : int or None, optional
+        If present, resamples the mask to this resoltion. Applied before buffering. Defaults to 0.
+
+    Returns
+    -------
+    out_path : str
+        The path to the new mask.
+
+    """
+    raster_image = gdal.Open(in_raster_path)
+    raster_array = raster_image.GetVirtualMemArray()
+    band_array = band_raster[band-1]
+    if relation == "smaller":
+        mask_array = np.smaller(band_array, np.full_like(band_array, threshold), dtype=np.byte)
+    if relation == "greater":
+        mask_array = np.greater(band_array, np.full_like(band_array, threshold), dtype=np.byte)
+    out_mask = create_matching_dataset(raster_image, out_path, bands=1, datatype=gdal.GDT_Byte)
+    out_array = out_mask.GetVirtualMemArray(eAccess=gdal.GA_Update)
+    np.copyto(out_array, mask_array)
+    band_array = None
+    raster_image = None
+    out_array = None
+    out_mask = None
+    if out_resolution:
+        resample_image_in_place(out_path, out_resolution)
+    if buffer_size:
+        buffer_mask_in_place(out_path, buffer_size)
+    return out_path
+
+
 def add_masks(mask_paths, out_path, geometry_func="union"):
     """
     Creates a raster file by adding a list of mask files containing 0 and 1 values
@@ -2930,6 +2981,67 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     out_raster = None
     return out_path
 
+def change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to):
+    """
+    This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
+    in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
+
+    Parameters
+    ----------
+    old_class_path : str
+        Paths to a classification map to be used as the baseline map for the change detection.
+
+    new_class_path : str
+        Paths to a classification map with a newer acquisition date.
+
+    change_raster : str
+        Path to the output raster file that will be created.
+
+    change_from : list of int
+        List of integers with the class codes to be used as 'from' in the change detection.
+
+    change_to : list of int
+        List of integers with the class codes to be used as 'to' in the change detection.
+
+    Returns:
+    ----------
+    change_raster : str (path to a raster file of type UInt32)
+        The path to the new change layer containing the acquisition date of the new class image
+        expressed as the difference to the 1/1/2000, where a change has been found, or zero otherwise.
+    """
+
+    log.info("Producing change layer from two class maps.")
+    # create masks from the classes of interest
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        from_class_mask_path = create_mask_from_class_map(old_class_path, \
+                                                          os.path.join(td, os.path.basename(old_class_path)[:-4] + "_temp.msk"),
+                                                          change_from)
+        to_class_mask_path =   create_mask_from_class_map(new_class_path, \
+                                                          os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
+                                                          change_to)
+        # combine masks by finding pixels that are 1 in the old mask and 1 in the new mask
+        out_mask_path = os.path.join(td, "combined.msk")
+        add_masks([from_class_mask_path, to_class_mask_path], out_mask_path, geometry_func="union")
+        # replace all pixels != 2 with 0 and all pixels == 2 with the new acquisition date
+        #TODO: test this
+        change_image = create_matching_dataset(new_class_path, change_raster, bands=1, datatype=gdal.GDT_UInt32)
+        dates_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write).squeeze()
+        out_mask = gdal.Open(out_mask_path, GA_Read)
+        out_mask_array = out_mask.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+        # Gets timestamp as integer in form yyyymmdd
+        new_date = get_image_acquisition_time(new_class_path)
+        reference_date = datetime.datetime(2000,1,1,0,0,0,0)
+        date_difference = new_date - reference_date
+        date = np.uint32(date_difference.total_seconds() / 60 / 60 / 24) #convert to 24-hour days
+        #change_raster = np.where, timestamp where 2 or zero elsewhere
+        dates_array[np.where(out_mask_array==2)] = date
+        dates_array[np.where(out_mask_array!=2)] = 0
+        change_image = None
+        dates_array = None
+        out_mask = None
+        out_mask_array = None
+    return change_raster
+
 
 def verify_change_detections(class_map_paths, out_path, classes_of_interest, buffer_size=0, out_resolution=None):
     """
@@ -2958,7 +3070,6 @@ def verify_change_detections(class_map_paths, out_path, classes_of_interest, buf
         The path to the new mask.
     """
 
-    #TODO: test this function
     log.info("Producing confidence layer from subsequent detections for classes: {}".format(classes_of_interest))
     # create masks from the classes of interest
     with TemporaryDirectory(dir=os.getcwd()) as td:
@@ -3381,9 +3492,9 @@ def scale_to_uint8(x, percentiles=[0,100]):
     x[x>amax] = amax
     if amin == amax:
         if amin < 0:
-            amin = 0:
+            amin = 0
         if amin >255:
-            amin = 255:
+            amin = 255
         xscaled = np.full_like(x, fill_value=np.uint8(amin), dtype=np.uint8)
     else:
         xscaled = (x - amin) / (amax - amin) * (anewmax - anewmin) + anewmin
