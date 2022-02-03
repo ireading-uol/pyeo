@@ -3533,14 +3533,14 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
     # yRes --- output vertical resolution
     #palette = "rgb"
     image = gdal.Open(in_raster_path)
-    if len(bands) > image.RasterCount:
-        log.warning("Fewer than 3 bands. Visualising only band 1.")
+    if image.RasterCount < 3:
         bands=[1]
         #palette = "gray"
         if scale_factors is None:
             scale_factors = [[0,14,0,255]] # this is specific to a classified image with 14 classes
-    if scale_factors is None:
-        scale_factors = [[0,2000,0,255]] # this is specific to Sentinel-2
+    else:
+        if scale_factors is None:
+            scale_factors = [[0,2000,0,255]] # this is specific to Sentinel-2
     kwargs = {
         'format': format,
         'outputType': gdal.GDT_Byte,

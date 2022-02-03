@@ -420,6 +420,7 @@ def rolling_detection(config_path,
                 raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
 
             # sort class images by image acquisition date
+            #TODO: drop the composite classifications from this list
             class_image_paths = list(filter(pyeo.filesystem_utilities.get_image_acquisition_time, class_image_paths))
             class_image_paths.sort(key=lambda x: pyeo.filesystem_utilities.get_image_acquisition_time(x))
             for index, image in enumerate(class_image_paths):
@@ -449,18 +450,17 @@ def rolling_detection(config_path,
                 sys.exit(1)
             log.info("Latest class composite: {}".format(latest_class_composite_path))
 
-            # combine masks from n subsequent dates into a confirmed change detection image
+            # find change patterns in the stack of classification images
             for index, image in enumerate(class_image_paths):
                 before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
                 after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(image))
                 log.info("  early time stamp: {}".format(before_timestamp))
                 log.info("  late  time stamp: {}".format(after_timestamp))
                 change_raster = os.path.join(probability_image_dir,
-                                             "change_{}_{}_{}_n{}.tif".format(
+                                             "change_{}_{}_{}.tif".format(
                                              before_timestamp.strftime("%Y%m%dT%H%M%S"),
                                              tile_id,
-                                             after_timestamp.strftime("%Y%m%dT%H%M%S"),
-                                             len(class_image_paths))
+                                             after_timestamp.strftime("%Y%m%dT%H%M%S"))
                                              )
                 log.info("  Change raster file to be created: {}".format(change_raster))
                 # This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'

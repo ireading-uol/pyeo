@@ -722,6 +722,7 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 5, attri
     log.info("Training the random forest model.")
     log.info("  Class labels: {}".format(np.unique(classes)))
     log.info("  Learning data labels: {}".format(np.unique(learning_data)))
+    #TODO: consider training a straight random forest model here
     model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
                                      min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
     model.fit(learning_data, classes)
