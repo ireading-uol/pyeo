@@ -409,7 +409,7 @@ def rolling_detection(config_path,
 
         # ------------------------------------------------------------------------
         # Step 4: Pair up the class images with the composite baseline map 
-        # and identify all pixels with the change between classes of interest, e.g. from class 1 to 2,3 or 8.
+        # and identify all pixels with the change between groups of classes of interest.
         # Currently this is being done together with the classification step.
         # ------------------------------------------------------------------------
         if do_all or do_classify:
