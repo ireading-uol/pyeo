@@ -414,7 +414,7 @@ def rolling_detection(config_path,
         # ------------------------------------------------------------------------
         if do_all or do_classify:
             log.info("---------------------------------------------------------------")
-            log.info("Creating change layers based on {} repeated subsequent change detections.".format(n_confirmations))
+            log.info("Creating change layers from stacked class images.")
             log.info("---------------------------------------------------------------")
             log.info("Change of interest is from any of the classes {} to any of the classes {}.".format(from_classes, to_classes))
 
@@ -445,7 +445,8 @@ def rolling_detection(config_path,
                              "check that the earliest dated image in your images/merged folder is later than the earliest"
                              " dated image in your composite/ folder.")
                 sys.exit(1)
-            latest_class_composite_path = os.path.join(class_out_dir, os.path.basename(latest_composite_path)[-4]+"_class.tif")
+            latest_class_composite_path = os.path.join(categorised_image_dir, os.path.basename(latest_composite_path)[:-4]+"_class.tif")
+            log.info("Most recent class composite at {}".format(latest_class_composite_path))
             if not os.path.exists(latest_class_composite_path):
                 log.critical("Latest class composite not found. The first time you run this script, you need to include the "
                              "--build-composite flag to create a base composite to work off. If you have already done this,"
@@ -472,8 +473,8 @@ def rolling_detection(config_path,
                 pyeo.raster_manipulation.change_from_class_maps(latest_class_composite_path,
                                                                 image,
                                                                 change_raster, 
-                                                                change_from,
-                                                                change_to)
+                                                                change_from = from_classes,
+                                                                change_to = to_classes)
 
             # combine all change layers into one output raster with two layers:
             #   (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)

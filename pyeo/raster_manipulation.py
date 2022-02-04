@@ -2941,7 +2941,7 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     log.info("Adding masks:")
     for mask in mask_paths:
         log.info("   {}".format(mask))
-    masks = [gdal.Open(mask_path)
+    masks = [gdal.Open(mask_path, gdal.GA_ReadOnly)
              for mask_path
              in mask_paths]
     if None in masks:
@@ -2954,12 +2954,10 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     projection = masks[0].GetProjection()
     out_raster = create_new_image_from_polygon(combined_polygon, out_path, x_res, y_res,
                                                bands, projection, datatype=gdal.GDT_Byte)
-    out_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write)
-    out_array = out_array.squeeze() # This here to account for unaccountable extra dimension Windows patch adds
+    out_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write).squeeze()
     out_array[:, :] = 1
     for mask_index, in_mask in enumerate(masks):
-        in_mask_array = in_mask.GetVirtualMemArray()
-        in_mask_array = in_mask_array.squeeze()  # See previous comment
+        in_mask_array = in_mask.GetVirtualMemArray().squeeze()
         if geometry_func == "intersect":
             out_x_min, out_x_max, out_y_min, out_y_max = pixel_bounds_from_polygon(out_raster, combined_polygon)
             in_x_min, in_x_max, in_y_min, in_y_max = pixel_bounds_from_polygon(in_mask, combined_polygon)
@@ -2979,7 +2977,10 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
         in_mask_array = None
     out_array = None
     out_raster = None
+    for mask in masks:
+        mask = None
     return out_path
+
 
 def change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to):
     """
@@ -3010,36 +3011,36 @@ def change_from_class_maps(old_class_path, new_class_path, change_raster, change
         expressed as the difference to the 1/1/2000, where a change has been found, or zero otherwise.
     """
 
-    log.info("Producing change layer from two class maps.")
     # create masks from the classes of interest
     with TemporaryDirectory(dir=os.getcwd()) as td:
-        from_class_mask_path = create_mask_from_class_map(old_class_path, \
-                                                          os.path.join(td, os.path.basename(old_class_path)[:-4] + "_temp.msk"),
-                                                          change_from)
-        to_class_mask_path =   create_mask_from_class_map(new_class_path, \
-                                                          os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
-                                                          change_to)
+        from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path, 
+                                                          out_path = os.path.join(td, os.path.basename(old_class_path)[:-4] + "_temp.msk"),
+                                                          classes_of_interest = change_from)
+        to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path, 
+                                                          out_path = os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
+                                                          classes_of_interest = change_to)
         # combine masks by finding pixels that are 1 in the old mask and 1 in the new mask
-        out_mask_path = os.path.join(td, "combined.msk")
-        add_masks([from_class_mask_path, to_class_mask_path], out_mask_path, geometry_func="union")
-        # replace all pixels != 2 with 0 and all pixels == 2 with the new acquisition date
-        #TODO: test this
-        change_image = create_matching_dataset(new_class_path, change_raster, bands=1, datatype=gdal.GDT_UInt32)
-        dates_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write).squeeze()
-        out_mask = gdal.Open(out_mask_path, GA_Read)
-        out_mask_array = out_mask.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+        added_mask_path = add_masks([from_class_mask_path, to_class_mask_path], os.path.join(td, "combined.msk"), geometry_func="intersect")
+        log.info("added mask path {}".format(added_mask_path))
+        new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
+        change_image = create_matching_dataset(new_class_image, change_raster, format='GTiff', bands=1, datatype=gdal.GDT_UInt32)
+        new_class_image = None
+        change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write).squeeze()
+        added_mask = gdal.Open(added_mask_path, gdal.GA_ReadOnly)
+        added_mask_array = added_mask.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
         # Gets timestamp as integer in form yyyymmdd
         new_date = get_image_acquisition_time(new_class_path)
         reference_date = datetime.datetime(2000,1,1,0,0,0,0)
         date_difference = new_date - reference_date
         date = np.uint32(date_difference.total_seconds() / 60 / 60 / 24) #convert to 24-hour days
-        #change_raster = np.where, timestamp where 2 or zero elsewhere
-        dates_array[np.where(out_mask_array==2)] = date
-        dates_array[np.where(out_mask_array!=2)] = 0
+        log.info("date = {}".format(date))
+        # replace all pixels != 2 with 0 and all pixels == 2 with the new acquisition date
+        change_array[np.where(added_mask_array == 2)] = date
+        change_array[np.where(added_mask_array != 2)] = 0
+        added_mask_array = None
+        added_mask = None
+        change_array = None
         change_image = None
-        dates_array = None
-        out_mask = None
-        out_mask_array = None
     return change_raster
 
 
