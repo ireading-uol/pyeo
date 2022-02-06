@@ -901,10 +901,10 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
             in_array = np.ma.masked_equal(in_array, missing_data_value)
         result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
                       (np.nanmin(in_array), np.nanmax(in_array), np.nanmean(in_array), np.nanstd(in_array))})
-    log.info("[ RASTER FILE NAME ] = {}".format(in_raster_path))
-    log.info("[ RASTER STATS ] :")
+    log.info("Raster file stats for {}".format(in_raster_path))
     for key, item in result.items():
         log.info("   {} : {}".format(key, item))
+    in_raster = None
 
 
 def clever_composite_images(in_raster_path_list, composite_out_path, format="GTiff", chunks=10, generate_date_image=True,
@@ -2982,7 +2982,7 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     return out_path
 
 
-def change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to):
+def change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to, skip_existing=False):
     """
     This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
     in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
@@ -3004,6 +3004,9 @@ def change_from_class_maps(old_class_path, new_class_path, change_raster, change
     change_to : list of int
         List of integers with the class codes to be used as 'to' in the change detection.
 
+    skip_existing : boolean
+        If True, skip the production of files that already exist.
+
     Returns:
     ----------
     change_raster : str (path to a raster file of type UInt32)
@@ -3011,6 +3014,9 @@ def change_from_class_maps(old_class_path, new_class_path, change_raster, change
         expressed as the difference to the 1/1/2000, where a change has been found, or zero otherwise.
     """
 
+    if skip_existing and os.path.exists(change_raster):
+        log.info("File already exists: {}. Skipping.".format(change_raster))
+        return
     # create masks from the classes of interest
     with TemporaryDirectory(dir=os.getcwd()) as td:
         from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path, 
@@ -3586,16 +3592,19 @@ def combine_date_maps(date_image_paths, output_product):
         log.error("No date images found: {} {}".format(date_image_paths, e))
         return
 
-    out_raster = create_matching_dataset(date_image_paths[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
+    out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
     # Squeeze() to account for unaccountable extra dimension Windows patch adds
     out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write).squeeze()
     out_raster_array[:, :, :] = 0 # [bands, y, x]
     for index, date_image in enumerate(date_images):
         date_array = date_image.GetVirtualMemArray().squeeze()
-        out_raster_array[0, :, :] = np.minimum(out_raster_array[0, :, :], date_array, out=out_raster_array[0, :, :], \
-                                               where=np.where(np.add(out_raster_array[0, :, :], date_array) > 0))
+        locs = ( (out_raster_array[0, :, :] > 0) & (date_array > 0) )
+        out_raster_array[0, locs] = np.minimum(out_raster_array[0, locs], date_array[locs])
+        locs = ( (out_raster_array[0, :, :] == 0) & (date_array > 0) )
+        out_raster_array[0, locs] = date_array[locs]
         date_mask = np.where(date_array > 0, 1, 0)
-        out_raster_array[1, :, :] = np.add(out_raster_array[1, :, :], date_mask, out=out_raster_array[1, :, :])
+        #log.info("Types: {} and {}".format(type(out_raster_array[1, 0, 0]), type(date_mask[0,0]))
+        out_raster_array[1, :, :] = np.add(out_raster_array[1, :, :], date_mask)
         date_array = None
         date_mask
     out_raster_array = None

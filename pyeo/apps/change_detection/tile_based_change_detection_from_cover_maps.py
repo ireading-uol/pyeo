@@ -474,7 +474,8 @@ def rolling_detection(config_path,
                                                                 image,
                                                                 change_raster, 
                                                                 change_from = from_classes,
-                                                                change_to = to_classes)
+                                                                change_to = to_classes,
+                                                                skip_existing = skip_existing)
 
             # combine all change layers into one output raster with two layers:
             #   (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
@@ -493,6 +494,7 @@ def rolling_detection(config_path,
                                           after_timestamp.strftime("%Y%m%dT%H%M%S"))
                                           )
             pyeo.raster_manipulation.combine_date_maps(date_image_paths, output_product)
+            log.info("Created combined raster file with two layers: {}".format(output_product))
 
             log.info("Change date layers done and output product aggregated.")
 
@@ -706,9 +708,9 @@ if __name__ == "__main__":
     buffer_size = 30            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
     buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
     max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
-    from_classes = [1]          #find subsequent changes from any of these classes
-    to_classes = [2,3,4,5,7,11] #                        to any of these classes
-    skip_existing = True        # skip existing classification images
+    from_classes = [1,11]       #find subsequent changes from any of these classes
+    to_classes = [2,3,4,5,7]    #                          to any of these classes
+    skip_existing = False        # skip existing classification images
 
     '''
     e.g. classes in new matogrosso model	
