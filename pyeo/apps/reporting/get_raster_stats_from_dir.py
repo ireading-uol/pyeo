@@ -1,26 +1,15 @@
 """
-get raster stats from all tiff files in a directory
- """
+get raster stats and file sizes from all tiff files in a directory
+"""
 
-#import shutil
-#import sys
-
-#import pyeo.classification
-#import pyeo.queries_and_downloads
 import pyeo.raster_manipulation
 import pyeo.filesystem_utilities
 from pyeo.filesystem_utilities import get_filenames
 from pyeo.raster_manipulation import get_stats_from_raster_file
 
-#import configparser
-#import copy
 import argparse
-#import glob
-#import numpy as np
 import os
 from osgeo import gdal
-#import pandas as pd
-#import datetime as dt
 from tempfile import TemporaryDirectory
 
 gdal.UseExceptions()
@@ -36,6 +25,7 @@ def reports(path, logfile):
     log = pyeo.filesystem_utilities.init_log(logfile)
     for index, image in enumerate(image_paths):
         log.info("{}: {}".format(index+1, image))
+        log.info("   Size: {} MB".format(image, str(round(os.path.getsize(image)/1024/2024, 3))))
         get_stats_from_raster_file(image, format="GTiff", missing_data_value=0)
     return
 

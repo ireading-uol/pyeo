@@ -886,6 +886,11 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
     missing_data_value : int, optional
         The encoding of missing values in the raster that will be omitted from the calculations
 
+
+    Returns:
+    --------
+    result : dictionary
+        Dictionary containing the results of the function
     """
 
     log = logging.getLogger(__name__)
@@ -899,12 +904,45 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
         in_array = raster_band.ReadAsArray()
         if missing_data_value is not None:
             in_array = np.ma.masked_equal(in_array, missing_data_value)
-        result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
-                      (np.nanmin(in_array), np.nanmax(in_array), np.nanmean(in_array), np.nanstd(in_array))})
+        if in_array.count() == 0:
+            result.update({'band_{}'.format(band+1) : ' contains only missing values.'})
+        else:
+            result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
+                          (np.nanmin(in_array), np.nanmax(in_array), np.nanmean(in_array), np.nanstd(in_array))})
     log.info("Raster file stats for {}".format(in_raster_path))
     for key, item in result.items():
         log.info("   {} : {}".format(key, item))
     in_raster = None
+    return result
+
+
+def get_file_sizes(dir_path):
+    """
+    Gets all file sizes in bytes from the files contained in dir_path and its subdirs.
+
+    Parameters
+    ----------
+    dir_path : str
+        Paths to the files.
+
+    Returns
+    -------
+    results : dictionary
+        Dictionary containing the results of the function.
+    """
+    log = logging.getLogger(__name__)
+    results = {}
+    file_paths = [ f.path for f in os.scandir(dir_path) if f.is_file() ]
+    if len(file_paths) == 0:
+        log.warning("No files found in {} and its subdirectories.".format(dir_path))
+    for f in file_paths:
+        size = os.path.getsize(f)
+        results.update({'{}'.format(f) : "{}".format(str(size))}) 
+        log.info("File size of {} is {} MB.".format(f,str(size/1024/2024)))
+    for key, item in results.items():
+        log.info("   {} : {}".format(key, item))
+    return results
+
 
 
 def clever_composite_images(in_raster_path_list, composite_out_path, format="GTiff", chunks=10, generate_date_image=True,
