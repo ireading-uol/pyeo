@@ -323,26 +323,9 @@ def sent2_query(user, passwd, geojsonfile, start_date, end_date, cloud=100, tile
                 footprint = shapefile_to_wkt(geojsonfile)
             else:
                 raise InvalidGeometryFormatException("Please provide a .json, .geojson or a .shp as geometry.")
-            log.info("Sending Sentinel-2 query for GeoJSON:")
-            log.info("   footprint: {}".format(footprint))
-            log.info("   start_date: {}".format(start_date))
-            log.info("   end_date: {}".format(end_date))
-            log.info("   cloud_cover: {}".format(cloud))
-            log.info("   start_row: {}".format(start_row))
-            log.info("   product_type: {}".format(producttype))
-            log.info("   file_name: {}".format(filename))
             return _rest_query(user, passwd, footprint, start_date, end_date, cloud, start_row, producttype, filename)
         else:
-            log.info("Sending Sentinel-2 query for Tile:")
-            log.info("   tile_id: {}".format(tile_id))
-            log.info("   start_date: {}".format(start_date))
-            log.info("   end_date: {}".format(end_date))
-            log.info("   cloud_cover: {}".format(cloud))
-            log.info("   start_row: {}".format(start_row))
-            log.info("   product_type: {}".format(producttype))
-            log.info("   file_name: {}".format(filename))
             return _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud, start_row, producttype, filename)
-            #return _tile__query(user, passwd, tile_id, start_date, end_date, cloud, start_row, producttype)
 
 
 def _date_to_timestamp(date):
@@ -560,7 +543,8 @@ def get_landsat_api_key(conf, session):
     return session_key
 
 
-def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None', producttype=None, filename=None):
+def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None', 
+                              verbose=False, producttype=None, filename=None):
     """
     Gets all the products between start_date and end_date. Wraps sent2_query to avoid having passwords and
     long-format timestamps in code.
@@ -591,9 +575,15 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         The maximum level of cloud cover in images to be downloaded. Default: 100 (all images returned)
 
     tile_id : str
-        Sentinel-2 granule ID - only required in no geojson file is given and tile-based processing
+        Sentinel-2 granule ID - only required if no geojson file is given and tile-based processing
         is selected. Default: 'None' - no tile-based search but aoi-based search
  
+    verbose : boolean
+        If True, log additional text output.
+
+    producttype : str
+        Sentinel-2 product type to be used in the query. Default: None
+
     filename : str
         Sentinel-2 file name pattern to be used in the query. Default: None
 
@@ -609,6 +599,26 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     end_timestamp = dt.datetime.strptime(end_date, '%Y%m%d').isoformat(timespec='seconds') + 'Z'
     rolling_n = 0 # rolling number of search results
     n = 100 # number of individual search results of each query
+    if tile_id == "None":
+        #TODO: check that a valid GeoJSON file path is provided
+        log.info("Sending Sentinel-2 queries for GeoJSON footprint:")
+        log.info("   footprint: {}".format(footprint))
+        log.info("   start_date: {}".format(start_date))
+        log.info("   end_date: {}".format(end_date))
+        log.info("   cloud_cover: {}".format(cloud))
+        log.info("   start_row: {}".format(start_row))
+        log.info("   product_type: {}".format(producttype))
+        log.info("   file_name: {}".format(filename))
+    else:
+        #TODO: check that a valid Tile ID is provided
+        log.info("Sending Sentinel-2 query for Tile ID:")
+        log.info("   tile_id: {}".format(tile_id))
+        log.info("   start_date: {}".format(start_date))
+        log.info("   end_date: {}".format(end_date))
+        log.info("   cloud_cover: {}".format(cloud))
+        log.info("   start_row: {}".format(start_row))
+        log.info("   product_type: {}".format(producttype))
+        log.info("   file_name: {}".format(filename))
     while n == 100:
         result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover, tile_id=tile_id, 
                              start_row=rolling_n, producttype=producttype, filename=filename)
@@ -620,10 +630,14 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
             rolling_result =  {**rolling_result, **result} # concatenate the new results with the previous dataframe
             n = len(result)
             rolling_n = rolling_n + n
-            log.info("This query returned {} new images. The overall list now has {} images.".format(len(result), len(rolling_result)))
+            if verbose:
+                log.info("This query returned {} new images. The overall list now has {} images.".format(len(result), len(rolling_result)))
         if n ==100:
-            log.info("Submitting new query starting from row number {}".format(rolling_n))
-    log.info("Queries returned {} new images in total.".format(len(rolling_result)))
+            if verbose:
+                log.info("Submitting new query starting from row number {}".format(rolling_n))
+            pass
+    if verbose:
+        log.info("Queries returned {} new images in total.".format(len(rolling_result)))
     return rolling_result
 
 

@@ -157,11 +157,18 @@ def rolling_detection(config_path,
                                                                                           producttype=None #"S2MSI2A" or "S2MSI1C"
                                                                                           )
             log.info("--> Found {} L1C and L2A products for the composite:".format(len(composite_products_all)))
-            df = pd.DataFrame.from_dict(composite_products_all, orient='index')
+            df_all = pd.DataFrame.from_dict(composite_products_all, orient='index')
+
+            # check file sizes on the server. Should be >700MB, otherwise the file is faulty.
+            df_all['size'] = df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
+            df = df_all.query('size >= 700')
+            log.info("Removed {} faulty scenes <700MB in size from the list.".format(len(df_all)-len(df)))
+
             l1c_products = df[df.processinglevel == 'Level-1C']
             l2a_products = df[df.processinglevel == 'Level-2A']
             log.info("    {} L1C products".format(l1c_products.shape[0]))
             log.info("    {} L2A products".format(l2a_products.shape[0]))
+
 
             # during compositing stage, limit the number of images to download
             if l1c_products.shape[0] > max_image_number:
@@ -169,6 +176,7 @@ def rolling_detection(config_path,
                 log.info("Cloud cover per image in ascending order: {}".format(l1c_products.sort_values(by=['cloudcoverpercentage'], ascending=True)['cloudcoverpercentage']))
                 l1c_products = l1c_products.sort_values(by=['cloudcoverpercentage'], ascending=True)[:max_image_number]
                 log.info("    {} L1C products remain".format(l1c_products.shape[0]))
+
             if l2a_products.shape[0] > max_image_number:
                 log.info("Capping the number of L2A products to {}".format(max_image_number))
                 log.info("Cloud cover per image in ascending order: {}".format(l2a_products.sort_values(by=['cloudcoverpercentage'], ascending=True)['cloudcoverpercentage']))
@@ -200,8 +208,9 @@ def rolling_detection(config_path,
                                                                                        cloud=cloud_cover,
                                                                                        producttype="S2MSI2A"
                                                                                        )
+
                     matching_l2a_products_df = pd.DataFrame.from_dict(matching_l2a_products, orient='index')
-                    if len(matching_l2a_products_df) == 1:
+                    if len(matching_l2a_products_df) == 1 and uint32(matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])) > 700:
                         log.info("Replacing L1C {} with L2A product:".format(id))
                         log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
                         drop.append(l1c_products.index[r])
@@ -209,11 +218,16 @@ def rolling_detection(config_path,
                     if len(matching_l2a_products_df) == 0:
                         log.info("Found no match for L1C: {}.".format(id))
                     if len(matching_l2a_products_df) > 1:
-                        log.warning("Several matches found for L1C product.")
-                        log.info("Replacing L1C {} with L2A product:".format(id))
-                        log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
-                        drop.append(l1c_products.index[r])
-                        add.append(matching_l2a_products_df.iloc[0,:])
+                        # check file sizes on the server. Should be >700MB, otherwise the file is faulty.
+                        matching_l2a_products_df['size'] = matching_l2a_products_df['size'].str.split(' ').apply(lambda x: \
+                                                               float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
+                        matching_l2a_products_df = matching_l2a_products_df.query('size >= 700')
+                        if matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: \
+                                                    float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > 700:
+                            log.info("Replacing L1C {} with L2A product:".format(id))
+                            log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
+                            drop.append(l1c_products.index[r])
+                            add.append(matching_l2a_products_df.iloc[0,:])
                 if len(drop) > 0:
                     l1c_products = l1c_products.drop(index=drop)
                 if len(add) > 0:
@@ -245,6 +259,54 @@ def rolling_detection(config_path,
                                                             user=sen_user, 
                                                             passwd=sen_pass, 
                                                             try_scihub_on_fail=True)
+
+            # check for incomplete L2A downloads and do them again
+            incomplete_downloads = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=700*1024*1024)
+            if len(incomplete_downloads) > 0:
+                for safe_dir in incomplete_downloads:
+                    log.warning("Deleting incomplete download: {}".format(safe_dir))
+                    shutil.rmtree(safe_dir)
+                    id = os.path.basename(safe_dir)
+                    search_term = "*"+id.split("_")[2]+"_"+id.split("_")[3]+"_"+id.split("_")[4]+"_"+id.split("_")[5]+"*"
+                    log.info("Search term: {}.".format(search_term))
+                    matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user, 
+                                                                                       passwd=sen_pass, 
+                                                                                       start_date=composite_start_date,
+                                                                                       end_date=composite_end_date,
+                                                                                       filename=search_term,
+                                                                                       cloud=cloud_cover,
+                                                                                       producttype="S2MSI2A"
+                                                                                       )
+                    matching_l2a_products_df_all = pd.DataFrame.from_dict(matching_l2a_products, orient='index')
+
+                    # check file sizes on the server. Should be >700MB, otherwise the file is faulty.
+                    matching_l2a_products_df_all['size'] = matching_l2a_products_df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
+                    matching_l2a_products_df = matching_l2a_products_df_all.query('size >= 700')
+                    log.info("Removed {} faulty scenes <700MB in size from the list.".format(len(matching_l2a_products_df_all)-len(matching_l2a_products_df)))
+
+                    if len(matching_l2a_products_df) == 1:
+                        l2a_product = matching_l2a_products_df.iloc[0,:]
+                    if len(matching_l2a_products_df) == 0:
+                        log.warning("Found no match for L2A: {}.".format(id))
+                    if len(matching_l2a_products_df) > 1:
+                        log.warning("Several matches found for L2A product. Using {}".format(matching_l2a_products_df.iloc[0,:]['title']))
+                        l2a_product = matching_l2a_products_df.iloc[0,:]
+                    log.info("Downloading Sentinel-2 L2A product again.")
+                    pyeo.queries_and_downloads.download_s2_data(l2a_product.to_dict('index'),
+                                                                composite_l1_image_dir, 
+                                                                composite_l2_image_dir, 
+                                                                download_source,
+                                                                user=sen_user, 
+                                                                passwd=sen_pass, 
+                                                                try_scihub_on_fail=True)
+                # check download size again
+                incomplete_downloads = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=700*1024*1024)
+                if len(incomplete_downloads) > 0:
+                    log.error("Repeated download of incomplete L2A image failed for:")
+                    for i in incomplete_downloads:
+                        log.info("  {}".format(i))
+
+
             log.info("---------------------------------------------------------------")
             log.info("Image download and atmospheric correction for composite is complete.")
             log.info("---------------------------------------------------------------")
@@ -290,7 +352,13 @@ def rolling_detection(config_path,
                                                                                producttype=None #"S2MSI2A" or "S2MSI1C"
                                                                                )
             log.info("--> Found {} L1C and L2A products for change detection:".format(len(products_all)))
-            df = pd.DataFrame.from_dict(products_all, orient='index')
+            df_all = pd.DataFrame.from_dict(products_all, orient='index')
+
+            # check file sizes on the server. Should be >700MB, otherwise the file is faulty.
+            df_all['size'] = df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
+            df = df_all.query('size >= 700')
+            log.info("Removed {} faulty scenes <700MB in size from the list.".format(len(df_all)-len(df)))
+
             l1c_products = df[df.processinglevel == 'Level-1C']
             l2a_products = df[df.processinglevel == 'Level-2A']
             log.info("    {} L1C products".format(l1c_products.shape[0]))
@@ -321,8 +389,11 @@ def rolling_detection(config_path,
                                                                                        cloud=cloud_cover,
                                                                                        producttype="S2MSI2A"
                                                                                        )
+
                     matching_l2a_products_df = pd.DataFrame.from_dict(matching_l2a_products, orient='index')
-                    if len(matching_l2a_products_df) == 1:
+                    if len(matching_l2a_products_df) == 1 and \
+                           matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: \
+                           float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > 700:
                         log.info("Replacing L1C {} with L2A product:".format(id))
                         log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
                         drop.append(l1c_products.index[r])
@@ -330,11 +401,17 @@ def rolling_detection(config_path,
                     if len(matching_l2a_products_df) == 0:
                         log.info("Found no match for L1C: {}.".format(id))
                     if len(matching_l2a_products_df) > 1:
-                        log.warning("Several matches found for L1C product.")
-                        log.info("Replacing L1C {} with L2A product:".format(id))
-                        log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
-                        drop.append(l1c_products.index[r])
-                        add.append(matching_l2a_products_df.iloc[0,:])
+                        # check file sizes on the server. Should be >700MB, otherwise the file is faulty.
+                        matching_l2a_products_df['size'] = matching_l2a_products_df['size'].str.split(' ').apply(lambda x: \
+                                                               float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
+                        matching_l2a_products_df = matching_l2a_products_df.query('size >= 700')
+                        if matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: \
+                                                    float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > 700:
+                            log.info("Replacing L1C {} with L2A product:".format(id))
+                            log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
+                            drop.append(l1c_products.index[r])
+                            add.append(matching_l2a_products_df.iloc[0,:])
+
                 if len(drop) > 0:
                     l1c_products = l1c_products.drop(index=drop)
                 if len(add) > 0:
@@ -364,6 +441,53 @@ def rolling_detection(config_path,
                                                             user=sen_user, 
                                                             passwd=sen_pass, 
                                                             try_scihub_on_fail=True)
+
+            # check for incomplete L2A downloads and do them again
+            incomplete_downloads = pyeo.raster_manipulation.find_small_safe_dirs(l2_image_dir, threshold=900*1024*1024)
+            if len(incomplete_downloads) > 0:
+                for safe_dir in incomplete_downloads:
+                    log.warning("Deleting incomplete download: {}".format(safe_dir))
+                    shutil.rmtree(safe_dir)
+                    id = os.path.basename(safe_dir)
+                    search_term = "*"+id.split("_")[2]+"_"+id.split("_")[3]+"_"+id.split("_")[4]+"_"+id.split("_")[5]+"*"
+                    log.info("Search term: {}.".format(search_term))
+                    matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user, 
+                                                                                       passwd=sen_pass, 
+                                                                                       start_date=start_date,
+                                                                                       end_date=end_date,
+                                                                                       filename=search_term,
+                                                                                       cloud=cloud_cover,
+                                                                                       producttype="S2MSI2A"
+                                                                                       )
+                    matching_l2a_products_df_all = pd.DataFrame.from_dict(matching_l2a_products, orient='index')
+
+                    # check file sizes on the server. Should be >700MB, otherwise the file is faulty.
+                    matching_l2a_products_df_all['size'] = matching_l2a_products_df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
+                    matching_l2a_products_df = matching_l2a_products_df_all.query('size >= 700')
+                    log.info("Removed {} faulty scenes <700MB in size from the list.".format(len(matching_l2a_products_df_all)-len(matching_l2a_products_df)))
+
+                    if len(matching_l2a_products_df) == 1:
+                        l2a_product = matching_l2a_products_df.iloc[0,:]
+                    if len(matching_l2a_products_df) == 0:
+                        log.warning("Found no match for L2A: {}.".format(id))
+                    if len(matching_l2a_products_df) > 1:
+                        log.warning("Several matches found for L2A product. Using {}".format(matching_l2a_products_df.iloc[0,:]['title']))
+                        l2a_product = matching_l2a_products_df.iloc[0,:]
+                    log.info("Downloading Sentinel-2 L2A product again.")
+                    pyeo.queries_and_downloads.download_s2_data(l2a_product.to_dict('index'),
+                                                                l1_image_dir, 
+                                                                l2_image_dir, 
+                                                                download_source,
+                                                                user=sen_user, 
+                                                                passwd=sen_pass, 
+                                                                try_scihub_on_fail=True)
+                # check download size again
+                incomplete_downloads = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=900*1024*1024)
+                if len(incomplete_downloads) > 0:
+                    log.error("Repeated download of incomplete L2A image failed for:")
+                    for i in incomplete_downloads:
+                        log.info("  {}".format(i))
+
             log.info("---------------------------------------------------------------")
             log.info("Image download and atmospheric correction for change detection images is complete.")
             log.info("---------------------------------------------------------------")

@@ -916,6 +916,40 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
     return result
 
 
+def get_dir_size(path='.'):
+    """
+    Gets the size of all contents of a directory.
+    """
+    total = 0
+    with os.scandir(path) as it:
+        for entry in it:
+            if entry.is_file():
+                total += entry.stat().st_size
+            elif entry.is_dir():
+                total += get_dir_size(entry.path)
+    return total
+
+
+def find_small_safe_dirs(path, threshold=900*1024*1024):
+    """
+    Quickly finds all subdirectories ending with ".SAFE" or ".safe" and logs a warning if the 
+    directory size is less than a threshold, 900 MB by default. This indicates incomplete downloads
+
+    Returns a list of all paths to the SAFE directories that are smaller than the threshold.
+    """
+    dir_paths = [ os.path.join(p,d) for p,ds,f in os.walk(path) for d in ds \
+                  if os.path.isdir(os.path.join(p, d)) \
+                  and (d.endswith(".SAFE") or d.endswith(".safe")) ]
+    if len(dir_paths) == 0:
+         log.info("No .SAFE directories found in {}.".format(path))
+    small_dirs = []
+    for index, dir_path in enumerate(dir_paths):
+        size = get_dir_size(dir_path)
+        if size < threshold:
+            log.warning("Incomplete download likely: {} MB: {}".format(str(round(size/1024/1024)), dir_path))
+        small_dirs = small_dirs + [dir_path]
+    return small_dirs
+
 def get_file_sizes(dir_path):
     """
     Gets all file sizes in bytes from the files contained in dir_path and its subdirs.
