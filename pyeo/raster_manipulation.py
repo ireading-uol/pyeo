@@ -3615,19 +3615,26 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
     # heightPct --- height of the output raster in percentage (100 = original height)
     # xRes --- output horizontal resolution
     # yRes --- output vertical resolution
-    image = gdal.Open(in_raster_path, gdal.GA_Update)
+    try:
+        image = gdal.Open(in_raster_path, gdal.GA_Update)
+    except RuntimeError as e:
+        log.error("Error opening raster file: {}".format(in_raster_path))
+        log.error("  {}".format(e))
+        return
     #TODO: check data type of the in_raster - currently crashes when looking at images from the probabilities folder (wrong data type)
     if image.RasterCount < 3:
         log.info("Raster count is {}. Using band 1.".format(image.RasterCount))
-        bands=[1]
+        bands=[image.RasterCount]
         alg = 'nearest'
         palette = "rgba"
         band = image.GetRasterBand(1)
         data = band.ReadAsArray()
         scale_factors = None
+        output_type = gdal.GDT_Byte
     else:
         alg = None
         palette = None
+        output_type = gdal.GDT_Byte
         if scale_factors is None:
             scale_factors = [[0,2000,0,255]] # this is specific to Sentinel-2
         log.info("Scaling values from {}...{} to {}...{}".format(scale_factors[0][0], scale_factors[0][1], scale_factors[0][2], scale_factors[0][3]))
@@ -3635,7 +3642,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
     # All the options that gdal.Translate() takes are listed here: gdal.org/python/osgeo.gdal-module.html#TranslateOptions
     kwargs = {
         'format': format,
-        'outputType': gdal.GDT_Byte,
+        'outputType': output_type,
         'bandList' : bands,
         'noData' : nodata,
         'width' : width,
@@ -3649,7 +3656,8 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         try:
             histo = np.array(band.GetHistogram())
             log.info("Histogram: {}".format(np.where(histo > 0)[0]))
-            log.info("           {}".format(histo[np.where(histo > 0)[0]]))
+            log.info("           {}".format(histo[np.where(histo > 0)]))
+            log.info("Band data min, max: {}, {}".format(data.min(), data.max()))
             colors = gdal.ColorTable()
             if data.max() < 12:
                 log.info("Using custom colour table for up to 12 classes (0..11)")
@@ -3667,12 +3675,12 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
                 colors.SetColorEntry(11, (46, 139, 87, 255)) # Open Woodland
             else:
                 log.info("Using viridis colour table for {} classes".format(data.max()))
-                viridis = cm.get_cmap('viridis', data.max())
-                for index, color in viridis.colors:
+                viridis = cm.get_cmap('viridis', min(data.max(), 255))
+                for index, color in enumerate(viridis.colors):
                     colors.SetColorEntry(index, (int(color[0]*255), int(color[1]*255), int(color[2]*255), int(color[3]*255)))
-            out_image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
             band.SetRasterColorTable(colors)
             band.WriteArray(data)
+            out_image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
             driver = gdal.GetDriverByName('PNG')
             driver.CreateCopy(out_raster_path, out_image, 0)
             data = None
@@ -3680,8 +3688,8 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
             image = None
             band = None
         except Exception as e: 
-            log.error(e) 
-            log.info("Skipping creation of quicklook for image: {}".format(out_raster_path)) 
+            log.error("An error occurred: {}".format(e)) 
+            log.info("  Skipping quicklook for image: {}".format(out_raster_path)) 
             image = None
             return
     else:

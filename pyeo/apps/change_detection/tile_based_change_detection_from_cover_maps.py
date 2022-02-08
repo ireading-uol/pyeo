@@ -159,11 +159,11 @@ def rolling_detection(config_path,
             log.info("--> Found {} L1C and L2A products for the composite:".format(len(composite_products_all)))
             df_all = pd.DataFrame.from_dict(composite_products_all, orient='index')
 
-            # check file sizes on the server. Should be >600MB, otherwise the file is faulty.
+            # check granule sizes on the server
             df_all['size'] = df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
-            df = df_all.query('size >= 600')
-            log.info("Removed {} faulty scenes <600MB in size from the list:".format(len(df_all)-len(df)))
-            df_faulty = df_all.query('size < 600')
+            df = df_all.query('size >= '+str(faulty_granule_threshold))
+            log.info("Removed {} faulty scenes <{}MB in size from the list:".format(len(df_all)-len(df), faulty_granule_threshold))
+            df_faulty = df_all.query('size < '+str(faulty_granule_threshold))
             for r in range(len(df_faulty)):
                 log.info("   {} MB: {}".format(df_faulty.iloc[r,:]['size'], df_faulty.iloc[r,:]['title']))
 
@@ -194,7 +194,7 @@ def rolling_detection(config_path,
                 log.info("    {} L2A products".format(l2a_products.shape[0]))
             df = None
 
-            #TODO: Before the next step, seacrh the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes are > 600 MB
+            #TODO: Before the next step, search the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes
             # Remove those already obtained from the list
 
             if l1c_products.shape[0] > 0:
@@ -216,7 +216,7 @@ def rolling_detection(config_path,
                                                                                        )
 
                     matching_l2a_products_df = pd.DataFrame.from_dict(matching_l2a_products, orient='index')
-                    if len(matching_l2a_products_df) == 1 and matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > 600:
+                    if len(matching_l2a_products_df) == 1 and matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > faulty_granule_threshold:
                         log.info("Replacing L1C {} with L2A product:".format(id))
                         log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
                         drop.append(l1c_products.index[r])
@@ -224,10 +224,10 @@ def rolling_detection(config_path,
                     if len(matching_l2a_products_df) == 0:
                         log.info("Found no match for L1C: {}.".format(id))
                     if len(matching_l2a_products_df) > 1:
-                        # check file sizes on the server. Should be >600MB, otherwise the file is faulty.
+                        # check granule sizes on the server
                         matching_l2a_products_df['size'] = matching_l2a_products_df['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
-                        matching_l2a_products_df = matching_l2a_products_df.query('size >= 600')
-                        if matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > 600:
+                        matching_l2a_products_df = matching_l2a_products_df.query('size >= '+str(faulty_granule_threshold))
+                        if matching_l2a_products_df.iloc[0,:]['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]]) > faulty_granule_threshold:
                             log.info("Replacing L1C {} with L2A product:".format(id))
                             log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
                             drop.append(l1c_products.index[r])
@@ -265,10 +265,10 @@ def rolling_detection(config_path,
                                                             try_scihub_on_fail=True)
 
             # check for incomplete L2A downloads and remove them
-            incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=600*1024*1024)
+            incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=faulty_granule_threshold*1024*1024)
             if len(incomplete_downloads) > 0:
                 for index, safe_dir in enumerate(incomplete_downloads):
-                    if sizes[index]/1024/1024 < 600 and os.path.exists(safe_dir):
+                    if sizes[index]/1024/1024 < faulty_granule_threshold and os.path.exists(safe_dir):
                         log.warning("Found likely incomplete download of size {} MB: {}".format(str(round(sizes[index]/1024/1024)), safe_dir))
                         #shutil.rmtree(safe_dir)
 
@@ -319,11 +319,11 @@ def rolling_detection(config_path,
             log.info("--> Found {} L1C and L2A products for change detection:".format(len(products_all)))
             df_all = pd.DataFrame.from_dict(products_all, orient='index')
 
-            # check file sizes on the server. Should be >600MB, otherwise the file is faulty.
+            # check granule sizes on the server
             df_all['size'] = df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
-            df = df_all.query('size >= 600')
-            log.info("Removed {} faulty scenes <600MB in size from the list:".format(len(df_all)-len(df)))
-            df_faulty = df_all.query('size < 600')
+            df = df_all.query('size >= '+str(faulty_granule_threshold))
+            log.info("Removed {} faulty scenes <{}MB in size from the list:".format(len(df_all)-len(df), faulty_granule_threshold))
+            df_faulty = df_all.query('size < '+str(faulty_granule_threshold))
             for r in range(len(df_faulty)):
                 log.info("   {} MB: {}".format(df_faulty.iloc[r,:]['size'], df_faulty.iloc[r,:]['title']))
 
@@ -340,7 +340,7 @@ def rolling_detection(config_path,
                 log.info("    {} L2A products".format(l2a_products.shape[0]))
             df = None
 
-            #TODO: Before the next step, seacrh the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes are > 600 MB
+            #TODO: Before the next step, seacrh the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes
             # Remove those already obtained from the list
 
             if l1c_products.shape[0] > 0:
@@ -365,7 +365,7 @@ def rolling_detection(config_path,
                     if len(matching_l2a_products_df) == 1:
                         log.info(matching_l2a_products_df.iloc[0,:]['size'])
                         matching_l2a_products_df['size'] = matching_l2a_products_df['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
-                        if matching_l2a_products_df.iloc[0,:]['size'] > 600:
+                        if matching_l2a_products_df.iloc[0,:]['size'] > faulty_granule_threshold:
                             log.info("Replacing L1C {} with L2A product:".format(id))
                             log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
                             drop.append(l1c_products.index[r])
@@ -373,9 +373,9 @@ def rolling_detection(config_path,
                     if len(matching_l2a_products_df) == 0:
                         log.info("Found no match for L1C: {}.".format(id))
                     if len(matching_l2a_products_df) > 1:
-                        # check file sizes on the server. Should be >600MB, otherwise the file is faulty.
+                        # check granule sizes on the server
                         matching_l2a_products_df['size'] = matching_l2a_products_df['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
-                        if matching_l2a_products_df.iloc[0,:]['size'] > 600:
+                        if matching_l2a_products_df.iloc[0,:]['size'] > faulty_granule_threshold:
                             log.info("Replacing L1C {} with L2A product:".format(id))
                             log.info("              {}".format(matching_l2a_products_df.iloc[0,:]['title']))
                             drop.append(l1c_products.index[r])
@@ -412,10 +412,10 @@ def rolling_detection(config_path,
                                                             try_scihub_on_fail=True)
 
             # check for incomplete L2A downloads and remove them
-            incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(l2_image_dir, threshold=600*1024*1024)
+            incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(l2_image_dir, threshold=faulty_granule_threshold*1024*1024)
             if len(incomplete_downloads) > 0:
                 for index, safe_dir in enumerate(incomplete_downloads):
-                    if sizes[index]/1024/1024 < 600 and os.path.exists(safe_dir):
+                    if sizes[index]/1024/1024 < faulty_granule_threshold and os.path.exists(safe_dir):
                         log.warning("Found likely incomplete download of size {} MB: {}".format(str(round(sizes[index]/1024/1024)), safe_dir))
                         #shutil.rmtree(safe_dir)
 
@@ -766,7 +766,8 @@ if __name__ == "__main__":
     max_image_number = 50       #maximum number of images to be downloaded for compositing, in order of least cloud cover
     from_classes = [1,11]       #find subsequent changes from any of these classes
     to_classes = [2,3,4,5,7]    #                          to any of these classes
-    skip_existing = False        # skip existing classification images
+    skip_existing = False       # skip existing classification images
+    faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded
 
     '''
     e.g. classes in new matogrosso model	

@@ -209,39 +209,28 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     #log.info("Finding good pixels without missing values")
     #log.info("image_array.shape = {}".format(image_array.shape))
     n_samples = image_array.shape[0]  # gives x * y dimension of the whole image
-    good_mask = np.all(image_array != nodata, axis=1)
+    good_indices = np.where(image_array != nodata, axis=1)[0]
     good_sample_count = np.count_nonzero(good_mask)
-    #log.info("Number of good values: {}".format(good_sample_count))
-    #if good_sample_count <= 0.5*len(good_mask):  # If the images is less than 50% good pixels, do filtering
-    if 1 == 0:  # Removing the filter until we fix the classification issue with it
-        #log.info("Filtering nodata values")
-        good_indices = np.nonzero(good_mask)
-        good_samples = np.take(image_array, good_indices, axis=0).squeeze()
-        n_good_samples = len(good_samples)
-    else:
-        #log.info("Not worth filtering nodata, skipping.")
-        good_samples = image_array
-        good_indices = range(0, n_samples)
-        n_good_samples = n_samples
-    #log.info("   All  samples: {}".format(n_samples))
-    #log.info("   Good samples: {}".format(n_good_samples))
+    log.info("Proportion of non-missing values: {}%".format(good_sample_count/n_samples*100))
+    good_samples = np.take(image_array, good_indices, axis=0).squeeze()
+    n_good_samples = len(good_samples)
     classes = np.full(n_good_samples, nodata, dtype=np.ubyte)
     if prob_out_path:
         probs = np.full((n_good_samples, model.n_classes_), nodata, dtype=np.float32)
-
     chunk_size = int(n_good_samples / num_chunks)
     chunk_resid = n_good_samples - (chunk_size * num_chunks)
     log.info("   Number of chunks {} Chunk size {} Chunk residual {}".format(num_chunks, chunk_size, chunk_resid))
-    # The chunks iterate over all values in the array [x * y, bands] always with 8 bands per chunk
+    # The chunks iterate over all values in the array [x * y, bands] always with all bands per chunk
     for chunk_id in range(num_chunks):
         offset = chunk_id * chunk_size
         if chunk_id == num_chunks - 1:
             chunk_size = chunk_size + chunk_resid
         log.info("   Classifying chunk {} of size {}".format(chunk_id+1, chunk_size))
         chunk_view = good_samples[offset : offset + chunk_size]
-        #indices_view = good_indices[offset : offset + chunk_size]
+        indices_view = good_indices[offset : offset + chunk_size]
         out_view = classes[offset : offset + chunk_size]
         chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
+        indices_view = indices_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
         out_view[:] = model.predict(chunk_view)
         if prob_out_path:
             log.info("   Calculating probabilities")
