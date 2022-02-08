@@ -280,7 +280,7 @@ def rolling_detection(config_path,
             #raster_paths = pyeo.filesystem_utilities.get_raster_paths(l2a_paths, filepatterns=bands, dirpattern=resolution) # don't really need to know these
             #scl_raster_paths = pyeo.filesystem_utilities.get_raster_paths(l2a_paths, filepatterns=["SCL"], dirpattern="20m") # don't really need to know these
 
-            log.info("Applying simple cloud and cloud shadow mask based on SCL files and stacking the masked band raster files.")
+            log.info("Applying simple cloud, cloud shadow and haze mask based on SCL files and stacking the masked band raster files.")
             pyeo.raster_manipulation.apply_scl_cloud_mask(composite_l2_image_dir, 
                                                           composite_l2_masked_image_dir, 
                                                           scl_classes=[0,1,2,3,8,9,10,11],
@@ -422,7 +422,7 @@ def rolling_detection(config_path,
             log.info("---------------------------------------------------------------")
             log.info("Image download and atmospheric correction for change detection images is complete.")
             log.info("---------------------------------------------------------------")
-            log.info("Applying simple cloud and cloud shadow mask based on SCL files and stacking the masked band raster files.")
+            log.info("Applying simple cloud, cloud shadow and haze mask based on SCL files and stacking the masked band raster files.")
             l2a_paths = [ f.path for f in os.scandir(l2_image_dir) if f.is_dir() ]
             log.info("  l2_image_dir: {}".format(l2_image_dir))
             log.info("  l2_masked_image_dir: {}".format(l2_masked_image_dir))
