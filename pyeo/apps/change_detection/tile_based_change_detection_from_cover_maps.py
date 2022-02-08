@@ -262,8 +262,9 @@ def rolling_detection(config_path,
             incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=600*1024*1024)
             if len(incomplete_downloads) > 0:
                 for index, safe_dir in enumerate(incomplete_downloads):
-                    log.warning("Found likely incomplete download of size {} MB: {}".format(str(round(sizes[index]/1024/1024)), safe_dir))
-                    #shutil.rmtree(safe_dir)
+                    if sizes[index]/1024/1024 < 600 and os.path.exists(safe_dir):
+                        log.warning("Found likely incomplete download of size {} MB: {}".format(str(round(sizes[index]/1024/1024)), safe_dir))
+                        #shutil.rmtree(safe_dir)
 
             log.info("---------------------------------------------------------------")
             log.info("Image download and atmospheric correction for composite is complete.")
@@ -402,8 +403,9 @@ def rolling_detection(config_path,
             incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(l2_image_dir, threshold=600*1024*1024)
             if len(incomplete_downloads) > 0:
                 for index, safe_dir in enumerate(incomplete_downloads):
-                    log.warning("Found likely incomplete download of size {} MB: {}".format(str(round(sizes[index]/1024/1024)), safe_dir))
-                    #shutil.rmtree(safe_dir)
+                    if sizes[index]/1024/1024 < 600 and os.path.exists(safe_dir):
+                        log.warning("Found likely incomplete download of size {} MB: {}".format(str(round(sizes[index]/1024/1024)), safe_dir))
+                        #shutil.rmtree(safe_dir)
 
             log.info("---------------------------------------------------------------")
             log.info("Image download and atmospheric correction for change detection images is complete.")

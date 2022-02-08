@@ -2975,7 +2975,7 @@ def create_mask_from_band(in_raster_path, out_path, band, threshold, relation="s
     """
     raster_image = gdal.Open(in_raster_path)
     raster_array = raster_image.GetVirtualMemArray()
-    band_array = band_raster[band-1]
+    band_array = raster_array[band-1]
     if relation == "smaller":
         mask_array = np.smaller(band_array, np.full_like(band_array, threshold), dtype=np.byte)
     if relation == "greater":
@@ -2985,6 +2985,7 @@ def create_mask_from_band(in_raster_path, out_path, band, threshold, relation="s
     np.copyto(out_array, mask_array)
     band_array = None
     raster_image = None
+    raster_array = None
     out_array = None
     out_mask = None
     if out_resolution:
