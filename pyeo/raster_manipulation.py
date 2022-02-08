@@ -120,7 +120,7 @@ import logging
 import numpy as np
 import ogr
 import os
-from osgeo import gdal
+from osgeo import gdal, gdalconst
 from osgeo import gdal_array, osr, ogr
 from osgeo.gdal_array import NumericTypeCodeToGDALTypeCode, GDALTypeCodeToNumericTypeCode
 import osr
@@ -133,6 +133,7 @@ from tempfile import TemporaryDirectory
 import scipy.ndimage as ndimage
 import itertools as iterate
 import matplotlib.pylab as pl
+from matplotlib import cm
 from lxml import etree
 
 from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from_polygon, write_geometry, \
@@ -930,12 +931,12 @@ def get_dir_size(path='.'):
     return total
 
 
-def find_small_safe_dirs(path, threshold=900*1024*1024):
+def find_small_safe_dirs(path, threshold=600*1024*1024):
     """
     Quickly finds all subdirectories ending with ".SAFE" or ".safe" and logs a warning if the 
-    directory size is less than a threshold, 900 MB by default. This indicates incomplete downloads
+    directory size is less than a threshold, 600 MB by default. This indicates incomplete downloads
 
-    Returns a list of all paths to the SAFE directories that are smaller than the threshold.
+    Returns a list of all paths to the SAFE directories that are smaller than the threshold and a list of all sizes.
     """
     dir_paths = [ os.path.join(p,d) for p,ds,f in os.walk(path) for d in ds \
                   if os.path.isdir(os.path.join(p, d)) \
@@ -943,12 +944,14 @@ def find_small_safe_dirs(path, threshold=900*1024*1024):
     if len(dir_paths) == 0:
          log.info("No .SAFE directories found in {}.".format(path))
     small_dirs = []
+    sizes = []
     for index, dir_path in enumerate(dir_paths):
         size = get_dir_size(dir_path)
         if size < threshold:
             log.warning("Incomplete download likely: {} MB: {}".format(str(round(size/1024/1024)), dir_path))
-        small_dirs = small_dirs + [dir_path]
-    return small_dirs
+            small_dirs = small_dirs + [dir_path]
+            sizes = sizes +[size]
+    return small_dirs, sizes
 
 def get_file_sizes(dir_path):
     """
@@ -3579,6 +3582,7 @@ def scale_to_uint8(x, percentiles=[0,100]):
         xscaled = (x - amin) / (amax - amin) * (anewmax - anewmin) + anewmin
     return(xscaled.astype(np.uint8))
 
+
 def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG", bands=[1,2,3], nodata=None, scale_factors=None):
     """
     Creates a quicklook image of reduced size from an input GDAL object and saves it to out_raster_path.
@@ -3610,16 +3614,24 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
     # heightPct --- height of the output raster in percentage (100 = original height)
     # xRes --- output horizontal resolution
     # yRes --- output vertical resolution
-    #palette = "rgb"
-    image = gdal.Open(in_raster_path)
+    image = gdal.Open(in_raster_path, gdal.GA_Update)
+    #TODO: check data type of the in_raster - currently crashes when looking at images from the probabilities folder (wrong data type)
     if image.RasterCount < 3:
+        log.info("Raster count is {}. Using band 1.".format(image.RasterCount))
         bands=[1]
-        #palette = "gray"
-        if scale_factors is None:
-            scale_factors = [[0,14,0,255]] # this is specific to a classified image with 14 classes
+        alg = 'nearest'
+        palette = "rgba"
+        band = image.GetRasterBand(1)
+        data = band.ReadAsArray()
+        scale_factors = None
     else:
+        alg = None
+        palette = None
         if scale_factors is None:
             scale_factors = [[0,2000,0,255]] # this is specific to Sentinel-2
+        log.info("Scaling values from {}...{} to {}...{}".format(scale_factors[0][0], scale_factors[0][1], scale_factors[0][2], scale_factors[0][3]))
+
+    # All the options that gdal.Translate() takes are listed here: gdal.org/python/osgeo.gdal-module.html#TranslateOptions
     kwargs = {
         'format': format,
         'outputType': gdal.GDT_Byte,
@@ -3627,12 +3639,54 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         'noData' : nodata,
         'width' : width,
         'height' : height,
+        'resampleAlg' : alg,
         'scaleParams' : scale_factors,
-        #'rgbExpand' : palette,
-    }
-    image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
-    image = None
-    # All the options that gdal.Translate() takes are listed here: gdal.org/python/osgeo.gdal-module.html#TranslateOptions
+        'rgbExpand' : palette
+        }
+
+    if image.RasterCount < 3:
+        try:
+            histo = np.array(band.GetHistogram())
+            log.info("Histogram: {}".format(np.where(histo > 0)[0]))
+            log.info("           {}".format(histo[np.where(histo > 0)[0]]))
+            colors = gdal.ColorTable()
+            if data.max() < 12:
+                log.info("Using custom colour table for up to 12 classes (0..11)")
+                colors.SetColorEntry(0, (0, 0, 0, 0)) # no data
+                colors.SetColorEntry(1, (0, 100, 0, 255)) # Primary Forest
+                colors.SetColorEntry(2, (154, 205, 50, 255)) # plantation Forest 
+                colors.SetColorEntry(3, (139, 69, 19, 255)) # Bare Soil 
+                colors.SetColorEntry(4, (189, 183, 107, 255)) # Crops 
+                colors.SetColorEntry(5, (240, 230, 140, 255)) # Grassland 
+                colors.SetColorEntry(6, (0, 0, 205, 255)) # Open Water 
+                colors.SetColorEntry(7, (128, 0, 0, 255)) # Burn Scar 
+                colors.SetColorEntry(8, (255, 255, 255, 255)) # cloud 
+                colors.SetColorEntry(9, (60, 60, 60, 255)) # cloud shadow 
+                colors.SetColorEntry(10, (128, 128, 128, 255)) # Haze 
+                colors.SetColorEntry(11, (46, 139, 87, 255)) # Open Woodland
+            else:
+                log.info("Using viridis colour table for {} classes".format(data.max()))
+                viridis = cm.get_cmap('viridis', data.max())
+                for index, color in viridis.colors:
+                    colors.SetColorEntry(index, (int(color[0]*255), int(color[1]*255), int(color[2]*255), int(color[3]*255)))
+            out_image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
+            band.SetRasterColorTable(colors)
+            band.WriteArray(data)
+            driver = gdal.GetDriverByName('PNG')
+            driver.CreateCopy(out_raster_path, out_image, 0)
+            data = None
+            out_image = None
+            image = None
+            band = None
+        except Exception as e: 
+            log.error(e) 
+            log.info("Skipping creation of quicklook for image: {}".format(out_raster_path)) 
+            image = None
+            return
+    else:
+        out_image = gdal.Translate(out_raster_path, image, options = gdal.TranslateOptions(**kwargs))
+        out_image = None
+        image = None
     return out_raster_path
     
 
@@ -3661,7 +3715,7 @@ def combine_date_maps(date_image_paths, output_product):
     try:
         date_images = [gdal.Open(path) for path in date_image_paths]
     except FileNotFoundError as e:
-        log.error("No date images found: {} {}".format(date_image_paths, e))
+        log.error("No images found: {} {}".format(date_image_paths, e))
         return
 
     out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
@@ -3684,21 +3738,5 @@ def combine_date_maps(date_image_paths, output_product):
     date_images = None
 
     return output_product
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

@@ -186,7 +186,7 @@ def _tile_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_ro
     request_params = {
         "q"    : search_string,
         "rows" : 100,
-        "start": start_row,
+        "start": start_row
     }
 
     results = session.get(rest_url, timeout=600, params=request_params)
@@ -605,8 +605,7 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         log.info("   footprint: {}".format(footprint))
         log.info("   start_date: {}".format(start_date))
         log.info("   end_date: {}".format(end_date))
-        log.info("   cloud_cover: {}".format(cloud))
-        log.info("   start_row: {}".format(start_row))
+        log.info("   cloud_cover: {}".format(cloud_cover))
         log.info("   product_type: {}".format(producttype))
         log.info("   file_name: {}".format(filename))
     else:
@@ -615,8 +614,7 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         log.info("   tile_id: {}".format(tile_id))
         log.info("   start_date: {}".format(start_date))
         log.info("   end_date: {}".format(end_date))
-        log.info("   cloud_cover: {}".format(cloud))
-        log.info("   start_row: {}".format(start_row))
+        log.info("   cloud_cover: {}".format(cloud_cover))
         log.info("   product_type: {}".format(producttype))
         log.info("   file_name: {}".format(filename))
     while n == 100:
