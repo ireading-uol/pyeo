@@ -162,7 +162,10 @@ def rolling_detection(config_path,
             # check file sizes on the server. Should be >600MB, otherwise the file is faulty.
             df_all['size'] = df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
             df = df_all.query('size >= 600')
-            log.info("Removed {} faulty scenes <600MB in size from the list.".format(len(df_all)-len(df)))
+            log.info("Removed {} faulty scenes <600MB in size from the list:".format(len(df_all)-len(df)))
+            df_faulty = df_all.query('size < 600')
+            for r in range(len(df_faulty)):
+                log.info("   {} MB: {}".format(df_faulty.iloc[r,:]['size'], df_faulty.iloc[r,:]['title']))
 
             l1c_products = df[df.processinglevel == 'Level-1C']
             l2a_products = df[df.processinglevel == 'Level-2A']
@@ -190,6 +193,9 @@ def rolling_detection(config_path,
                 log.info("    {} L1C products".format(l1c_products.shape[0]))
                 log.info("    {} L2A products".format(l2a_products.shape[0]))
             df = None
+
+            #TODO: Before the next step, seacrh the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes are > 600 MB
+            # Remove those already obtained from the list
 
             if l1c_products.shape[0] > 0:
                 log.info("Checking for availability of L2A products to minimise download and atmospheric correction of L1C products.")
@@ -316,7 +322,10 @@ def rolling_detection(config_path,
             # check file sizes on the server. Should be >600MB, otherwise the file is faulty.
             df_all['size'] = df_all['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
             df = df_all.query('size >= 600')
-            log.info("Removed {} faulty scenes <600MB in size from the list.".format(len(df_all)-len(df)))
+            log.info("Removed {} faulty scenes <600MB in size from the list:".format(len(df_all)-len(df)))
+            df_faulty = df_all.query('size < 600')
+            for r in range(len(df_faulty)):
+                log.info("   {} MB: {}".format(df_faulty.iloc[r,:]['size'], df_faulty.iloc[r,:]['title']))
 
             l1c_products = df[df.processinglevel == 'Level-1C']
             l2a_products = df[df.processinglevel == 'Level-2A']
@@ -330,6 +339,9 @@ def rolling_detection(config_path,
                 log.info("    {} L1C products".format(l1c_products.shape[0]))
                 log.info("    {} L2A products".format(l2a_products.shape[0]))
             df = None
+
+            #TODO: Before the next step, seacrh the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes are > 600 MB
+            # Remove those already obtained from the list
 
             if l1c_products.shape[0] > 0:
                 log.info("Checking for availability of L2A products to minimise download and atmospheric correction of L1C products.")
