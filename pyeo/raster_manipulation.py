@@ -1457,7 +1457,8 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chu
         timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[i]))
         log.info("Image number {} has time stamp {}".format(i+1, timestamp))
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
-    composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
+    tile = get_sen_2_image_tile(os.path.basename(sorted_image_paths[-1]))
+    composite_out_path = os.path.join(composite_out_dir, "composite_{}_{}.tif".format(tile,last_timestamp))
     clever_composite_images(sorted_image_paths, composite_out_path, format, chunks=chunks, 
                             generate_date_image=generate_date_images, missing_data_value=missing_data_value)
     return composite_out_path
@@ -2927,7 +2928,6 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
         The path to the new mask.
 
     """
-    #TODO: pull this out of the above function
     class_image = gdal.Open(class_map_path)
     class_array = class_image.GetVirtualMemArray()
     mask_array = np.isin(class_array, classes_of_interest)
@@ -3615,12 +3615,18 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
     # heightPct --- height of the output raster in percentage (100 = original height)
     # xRes --- output horizontal resolution
     # yRes --- output vertical resolution
-    try:
-        image = gdal.Open(in_raster_path, gdal.GA_Update)
-    except RuntimeError as e:
-        log.error("Error opening raster file: {}".format(in_raster_path))
-        log.error("  {}".format(e))
-        return
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        try:
+            image = gdal.Open(in_raster_path, gdal.GA_ReadOnly)
+            tmpfile_path = os.path.join(td, os.path.basename(in_raster_path)[:-4]+"_copy.tif")
+            driver = gdal.GetDriverByName('GTiff')
+            driver.CreateCopy(tmpfile_path, image, 0)
+            image = None
+            image = gdal.Open(tmpfile_path, gdal.GA_Update)
+        except RuntimeError as e:
+            log.error("Error opening raster file: {}".format(in_raster_path))
+            log.error("  {}".format(e))
+            return
     #TODO: check data type of the in_raster - currently crashes when looking at images from the probabilities folder (wrong data type)
     if image.RasterCount < 3:
         log.info("Raster count is {}. Using band 1.".format(image.RasterCount))

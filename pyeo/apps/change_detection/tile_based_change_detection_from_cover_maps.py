@@ -156,6 +156,16 @@ def rolling_detection(config_path,
                                                                                           tile_id=tile_id,
                                                                                           producttype=None #"S2MSI2A" or "S2MSI1C"
                                                                                           )
+
+            #TODO: retrieve metadata on nodata percentage and prioritise download of images with low values
+            # This method currently only works for L2A products and needs expanding to L1C
+            '''
+            composite_products_all = pyeo.queries_and_downloads.get_nodata_percentage(sen_user, sen_pass, composite_products_all)
+            log.info("NO_DATA_PERCENTAGE:")
+            for uuid, metadata in composite_products_all.items():
+                log.info("{}: {}".format(metadata['title'], metadata['No_data_percentage']))
+            '''
+
             log.info("--> Found {} L1C and L2A products for the composite:".format(len(composite_products_all)))
             df_all = pd.DataFrame.from_dict(composite_products_all, orient='index')
 
@@ -172,19 +182,35 @@ def rolling_detection(config_path,
             log.info("    {} L1C products".format(l1c_products.shape[0]))
             log.info("    {} L2A products".format(l2a_products.shape[0]))
 
-
             # during compositing stage, limit the number of images to download
-            if l1c_products.shape[0] > max_image_number:
-                log.info("Capping the number of L1C products to {}".format(max_image_number))
-                log.info("Cloud cover per image in ascending order: {}".format(l1c_products.sort_values(by=['cloudcoverpercentage'], ascending=True)['cloudcoverpercentage']))
-                l1c_products = l1c_products.sort_values(by=['cloudcoverpercentage'], ascending=True)[:max_image_number]
-                log.info("    {} L1C products remain".format(l1c_products.shape[0]))
+            # to avoid only downloading partially covered granules with low cloud cover (which is calculated over the whole granule, 
+            # incl. missing values), we need to stratify our search for low cloud cover by relative orbit number
 
-            if l2a_products.shape[0] > max_image_number:
-                log.info("Capping the number of L2A products to {}".format(max_image_number))
-                log.info("Cloud cover per image in ascending order: {}".format(l2a_products.sort_values(by=['cloudcoverpercentage'], ascending=True)['cloudcoverpercentage']))
-                l2a_products = l2a_products.sort_values(by=['cloudcoverpercentage'], ascending=True)[:max_image_number]
-                log.info("    {} L2A products remain".format(l2a_products.shape[0]))
+            rel_orbits = np.unique(l1c_products['relativeorbitnumber'])
+            if len(rel_orbits) > 0:
+                if l1c_products.shape[0] > max_image_number/len(rel_orbits):
+                    log.info("Capping the number of L1C products to {}".format(max_image_number))
+                    log.info("Relative orbits found covering tile: {}".format(rel_orbits))
+                    uuids = []
+                    for orb in rel_orbits:
+                        uuids = uuids + list(l1c_products.loc[l1c_products['relativeorbitnumber'] == orb].sort_values(by=['cloudcoverpercentage'], ascending=True)['uuid'][:int(max_image_number/len(rel_orbits))])
+                    l1c_products = l1c_products[l1c_products['uuid'].isin(uuids)]
+                    log.info("    {} L1C products remain:".format(l1c_products.shape[0]))
+                    for product in l1c_products['title']:
+                        log.info("       {}".format(product))
+
+            rel_orbits = np.unique(l2a_products['relativeorbitnumber'])
+            if len(rel_orbits) > 0:
+                if l2a_products.shape[0] > max_image_number/len(rel_orbits):
+                    log.info("Capping the number of L2A products to {}".format(max_image_number))
+                    log.info("Relative orbits found covering tile: {}".format(rel_orbits))
+                    uuids = []
+                    for orb in rel_orbits:
+                        uuids = uuids + list(l2a_products.loc[l2a_products['relativeorbitnumber'] == orb].sort_values(by=['cloudcoverpercentage'], ascending=True)['uuid'][:int(max_image_number/len(rel_orbits))])
+                    l2a_products = l2a_products[l2a_products['uuid'].isin(uuids)]
+                    log.info("    {} L2A products remain:".format(l2a_products.shape[0]))
+                    for product in l2a_products['title']:
+                        log.info("       {}".format(product))
 
             if l1c_products.shape[0]>0 and l2a_products.shape[0]>0:
                 log.info("Filtering out L1C products that have the same 'beginposition' time stamp as an existing L2A product.")
@@ -764,9 +790,9 @@ if __name__ == "__main__":
     buffer_size = 30            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
     buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
     max_image_number = 50       #maximum number of images to be downloaded for compositing, in order of least cloud cover
-    from_classes = [1,11]       #find subsequent changes from any of these classes
-    to_classes = [2,3,4,5,7]    #                          to any of these classes
-    skip_existing = False       # skip existing classification images
+    from_classes = [1]          #find subsequent changes from any of these classes
+    to_classes = [2,3,4,5,7,11] #                          to any of these classes
+    skip_existing = False       # skip existing image products from processing
     faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded
 
     '''

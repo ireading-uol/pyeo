@@ -209,8 +209,14 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     #log.info("Finding good pixels without missing values")
     #log.info("image_array.shape = {}".format(image_array.shape))
     n_samples = image_array.shape[0]  # gives x * y dimension of the whole image
-    good_indices = np.where(image_array != nodata, axis=1)[0]
-    good_sample_count = np.count_nonzero(good_mask)
+    nbands = image_array.shape[1] # gives number of bands
+    boo = np.where(image_array[:,0] != nodata, True, False)
+    if nbands > 1:
+        for band in range(1, nbands, 1):
+            boo1 = np.where(image_array[:,band] != nodata, True, False)
+            boo = np.logical_and(boo, boo1)
+    good_indices = np.where(boo)[0] # get indices where all bands contain data
+    good_sample_count = np.count_nonzero(boo)
     log.info("Proportion of non-missing values: {}%".format(good_sample_count/n_samples*100))
     good_samples = np.take(image_array, good_indices, axis=0).squeeze()
     n_good_samples = len(good_samples)

@@ -1519,3 +1519,28 @@ def read_aoi(aoi_path):
         if aoi_dict["type"] == "FeatureCollection":
             aoi_dict = aoi_dict["features"][0]
         return aoi_dict
+
+
+def fetch_s2_nodata_percentage(api, uuid):
+    # No data pixel percentage values for L2A products can be found at:
+    # https://apihub.copernicus.eu/apihub/odata/v1/Products('d6cf01d2-3243-4681-8f52-cae50b08e1a2')/Attributes('No%20data%20pixel%20percentage')
+    url = api.api_url + "odata/v1/Products('{}')/Attributes('No data pixel percentage')".format(uuid)
+    response = api.session.get(url)
+    qi_info = {}
+    log.info(response.content)
+    response_str = str(response.content).split("Value>")[1].split("</d")[0]
+    qi_info["No_data_percentage"] = float(response_str)
+    return qi_info
+
+
+def get_nodata_percentage(user, passwd, products):
+    for uuid, metadata in products.items():
+        log.info("Querying metadata for {}: {}".format(uuid, metadata['title']))
+        api = SentinelAPI(user, passwd)
+        qi_info = fetch_s2_nodata_percentage(api, uuid)
+        if len(qi_info.items()) > 0:
+            products[uuid]['No_data_percentage'] = qi_info['No_data_percentage']
+        else:
+            log.error("Error - no metadata found for {}".format(metadata['title']))
+    return(products)
+
