@@ -319,7 +319,8 @@ def rolling_detection(config_path,
                                                           buffer_size=buffer_size_composite, 
                                                           bands=bands, 
                                                           out_resolution=10,
-                                                          haze=None)
+                                                          haze=None,
+                                                          skip_existing=skip_existing)
 
             log.info("Building initial cloud-free median composite from directory {}".format(composite_l2_masked_image_dir))
             pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir, 
@@ -466,7 +467,9 @@ def rolling_detection(config_path,
                                                           buffer_size=buffer_size, 
                                                           bands=bands, 
                                                           out_resolution=10,
-                                                          haze=None)
+                                                          haze=None,
+                                                          skip_existing=skip_existing)
+
 
         # ------------------------------------------------------------------------
         # Step 3: Classify each L2A image and the baseline composite
