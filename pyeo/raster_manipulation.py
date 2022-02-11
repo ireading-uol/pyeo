@@ -909,7 +909,8 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
             result.update({'band_{}'.format(band+1) : ' contains only missing values.'})
         else:
             result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
-                          (np.nanmin(in_array), np.nanmax(in_array), np.nanmean(in_array), np.nanstd(in_array))})
+                          (np.nanmin(in_array[~in_array.mask]), np.nanmax(in_array[~in_array.mask]), \
+                           np.nanmean(in_array[~in_array.mask]), np.nanstd(in_array[~in_array.mask]))})
     log.info("Raster file stats for {}".format(in_raster_path))
     for key, item in result.items():
         log.info("   {} : {}".format(key, item))
@@ -1072,14 +1073,15 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             stacked = np.dstack(res)
             #TODO: make sure this catches all pixels with missing values
             if missing_data_value is not None:
-                stacked = np.ma.getdata(np.ma.masked_equal(stacked, missing_data_value))
+                ma = np.ma.masked_equal(stacked, missing_data_value)
+                stacked[ma.mask] = np.nan
             median_raster = np.nanmedian(stacked, axis=-1)
             # catch pixels where all rasters have NaN values and set them to missing_data_value
             all_nan_locations = np.isnan(stacked).all(axis=-1)
             median_raster[all_nan_locations] = missing_data_value
             b = result.GetRasterBand(1).ReadAsArray()
-            log.info("Broadcasting from [{}:{}, {}:{}]".format(0, median_raster.shape[0], 0, median_raster.shape[1]))
-            log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
+            #log.info("Broadcasting from [{}:{}, {}:{}]".format(0, median_raster.shape[0], 0, median_raster.shape[1]))
+            #log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
             b[yoff:(yoff+ys), xoff:(xoff+xs)] = median_raster
             result.GetRasterBand(1).WriteArray(b)
         result = None    
@@ -1222,7 +1224,8 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
                 ds = None
             stacked = np.dstack(res)
             if missing_data_value is not None:
-                stacked = np.ma.getdata(np.ma.masked_equal(stacked, missing_data_value))
+                ma = np.ma.masked_equal(stacked, missing_data_value)
+                stacked[ma.mask] = nan
             median_raster = np.nanmedian(stacked, axis=-1)
             # catch pixels where all rasters have NaN values and set them to missing_data_value
             all_nan_locations = np.isnan(stacked).all(axis=-1)
@@ -2254,10 +2257,10 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
                         shutil.move(mask_path, out_mask_path)
                         resample_image_in_place(out_mask_path, out_resolution)
 
-def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B02", "B03", "B04", "B08"], out_resolution=10):
+def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B02", "B03", "B04", "B08"], out_resolution=10, haze=None):
     """
     For every .SAFE folder in l2_dir, creates a cloud-masked raster band for each selected band
-    based on the SCL layer. Applies a rough haze correction based on thresholing the blue band (B02<325).
+    based on the SCL layer. Applies a rough haze correction based on thresholding the blue band.
 
     Parameters
     ----------
@@ -2273,6 +2276,9 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
         List of names of bands to include in the final rasters. Defaults to ("B02", "B03", "B04", "B08")
     out_resolution : number, optional
         Resolution to resample every image to - units are defined by the image projection. Default is 10.
+    haze : number, optional
+        Threshold if a haze filter is to be applied. If specified, all pixel values where "B02" > haze will be masked out.
+        Defaults to None. If set, recommended thresholds range from 325 to 600 but can vary by scene conditions.   
 
     """
     safe_file_path_list = [os.path.join(l2_dir, safe_file_path)
@@ -2297,13 +2303,17 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
                     stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
                     mask_path = get_mask_path(temp_file)
                     create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
-                    temp_file_2 = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_haze.tif"
-                    apply_mask_to_image(mask_path, temp_file, temp_file_2)
-                    mask_path_2 = get_mask_path(temp_file_2)
-                    create_mask_from_band(temp_file_2, mask_path_2, band=1, threshold=325, relation="smaller", buffer_size=buffer_size)
-                    apply_mask_to_image(mask_path_2, temp_file_2, out_path)
-                    #shutil.move(temp_file, out_path)
-                    resample_image_in_place(out_path, out_resolution)
+                    if haze is not None:
+                        temp_file_2 = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_haze.tif"
+                        apply_mask_to_image(mask_path, temp_file, temp_file_2)
+                        mask_path_2 = get_mask_path(temp_file_2)
+                        create_mask_from_band(temp_file_2, mask_path_2, band=1, threshold=haze, relation="smaller", buffer_size=buffer_size)
+                        apply_mask_to_image(mask_path_2, temp_file_2, out_path)
+                        resample_image_in_place(out_path, out_resolution)
+                    else:
+                        apply_mask_to_image(mask_path, temp_file, out_path)
+                        resample_image_in_place(out_path, out_resolution)
+
 
 
 def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, bands_to_stack=("B2","B3","B4")):

@@ -134,6 +134,12 @@ def rolling_detection(config_path,
         # Step 1: Create an initial cloud-free median composite from Sentinel-2 as a baseline map
         # ------------------------------------------------------------------------
 
+        #TODO: Make the download optional at the compositing stage, i.e. if do_download is not selected, skip it 
+        #      and only call the median compositing function. Should be a piece of cake.
+        # if build_composite or do_all:
+        #     if do_download or do_all:
+        #         [...download the data for the composite...]
+        #     [...calculate the median composite from the available data...]
         if build_composite or do_all:
             log.info("---------------------------------------------------------------")
             log.info("Creating an initial cloud-free median composite from Sentinel-2 as a baseline map")
@@ -312,7 +318,8 @@ def rolling_detection(config_path,
                                                           scl_classes=[0,1,2,3,8,9,10,11],
                                                           buffer_size=buffer_size_composite, 
                                                           bands=bands, 
-                                                          out_resolution=10)
+                                                          out_resolution=10,
+                                                          haze=None)
 
             log.info("Building initial cloud-free median composite from directory {}".format(composite_l2_masked_image_dir))
             pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir, 
@@ -458,7 +465,8 @@ def rolling_detection(config_path,
                                                           scl_classes=[0,1,2,3,8,9,10,11],
                                                           buffer_size=buffer_size, 
                                                           bands=bands, 
-                                                          out_resolution=10)
+                                                          out_resolution=10,
+                                                          haze=None)
 
         # ------------------------------------------------------------------------
         # Step 3: Classify each L2A image and the baseline composite
@@ -787,9 +795,9 @@ if __name__ == "__main__":
     # TODO: bands and resolution can be made flexible BUT the bands need to be at the same resolution
     bands = ['B02', 'B03', 'B04', 'B08']
     resolution = '10m'
-    buffer_size = 30            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
+    buffer_size = 20            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
     buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
-    max_image_number = 50       #maximum number of images to be downloaded for compositing, in order of least cloud cover
+    max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
     from_classes = [1]          #find subsequent changes from any of these classes
     to_classes = [2,3,4,5,7,11] #                          to any of these classes
     skip_existing = False       # skip existing image products from processing
