@@ -320,6 +320,7 @@ def rolling_detection(config_path,
                                                           bands=bands, 
                                                           out_resolution=10,
                                                           haze=None,
+                                                          epsg=epsg,
                                                           skip_existing=skip_existing)
 
             log.info("Building initial cloud-free median composite from directory {}".format(composite_l2_masked_image_dir))
@@ -468,6 +469,7 @@ def rolling_detection(config_path,
                                                           bands=bands, 
                                                           out_resolution=10,
                                                           haze=None,
+                                                          epsg=epsg,
                                                           skip_existing=skip_existing)
 
 

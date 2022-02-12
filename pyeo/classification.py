@@ -35,6 +35,7 @@ from osgeo import osr
 from osgeo import ogr
 import joblib
 import numpy as np
+import random
 from scipy import sparse as sp
 import shutil
 from sklearn import ensemble as ens
@@ -644,7 +645,8 @@ def extract_features_to_csv(in_ras_path, training_shape_path, out_path, attribut
         writer = csv.writer(outfile)
         writer.writerows(sigs.T)
 
-def create_trained_model(training_image_file_paths, cross_val_repeats = 5, attribute="CODE"):
+
+def create_trained_model(training_image_file_paths, cross_val_repeats = 10, attribute="CODE"):
     """
     Creates a trained model from a set of training images with associated shapefiles.
 
@@ -674,7 +676,7 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 5, attri
     training_image_file_paths : list of str
         A list of filepaths to training images.
     cross_val_repeats : int, optional
-        The number of cross-validation repeats to use. Defaults to 5.
+        The number of cross-validation repeats to use. Defaults to 10.
     attribute : str, optional.
         The label of the field in the training shapefiles that contains the classification labels. Defaults to CODE.
 
@@ -709,29 +711,43 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 5, attri
         shape_paths = [ f.path for f in os.scandir(training_image_folder) \
                         if f.is_file() and os.path.basename(f) == shape_path_name ]
         if len(shape_paths) == 0:
-            log.error("{} not found.".format(shape_path_name))
-            continue
-        if len(shape_paths) > 1:
-            log.warning("Several versions of {} exist. Using the first of these files.".format(shape_path_name))
-            for f in shape_paths:
-                log.info("  {}".format(f))
-        shape_path = shape_paths[0]
-        this_training_data, this_classes = get_training_data(training_image_file_path, shape_path, attribute)
-        if learning_data is None:
-            learning_data = this_training_data
-            classes = this_classes
+            log.warning("{} not found. Skipping.".format(shape_path_name))
         else:
-            learning_data = np.append(learning_data, this_training_data, 0)
-            classes = np.append(classes, this_classes)
-    log.info("Training the random forest model.")
+            if len(shape_paths) > 1:
+                log.warning("Several versions of {} exist. Using the first of these files.".format(shape_path_name))
+                for f in shape_paths:
+                    log.info("  {}".format(f))
+            shape_path = shape_paths[0]
+            more_training_data, more_classes = get_training_data(training_image_file_path, shape_path, attribute)
+            log.info("  Found class labels: {}".format(np.unique(more_classes)))
+            if learning_data is None:
+                learning_data = more_training_data
+                classes = more_classes
+            else:
+                learning_data = np.append(learning_data, more_training_data, 0)
+                classes = np.append(classes, more_classes)
+    log.info("Training the model.")
     log.info("  Class labels: {}".format(np.unique(classes)))
-    log.info("  Learning data labels: {}".format(np.unique(learning_data)))
-    #TODO: consider training a straight random forest model here
+    log.info("  Class data labels   : {}".format(classes.shape))
+    log.info("  Learning data labels: {}".format(learning_data.shape))
+
+    ''' this saves the training data to a text file, currently disabled 
+    train_out_path = os.path.join(os.path.dirname(training_image_file_paths[0]), 'training_data.txt')
+    log.info("  Writing out training data to: {}".format(train_out_path))
+    with open(train_out_path, 'w') as f:
+        for line in range(len(classes)):
+            textline = str(classes[line])+", "+str(learning_data[line])
+            f.writelines(textline)
+    '''
+
     model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
                                      min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
     model.fit(learning_data, classes)
-    scores = cross_val_score(model, learning_data, classes, cv=cross_val_repeats)
+    scores = cross_val_score(model, learning_data, classes, scoring='accuracy', cv=cross_val_repeats)
+    log.info("Accuracy: {.3f} ({.3f})".format(np.mean(scores), np.std(scores)))
     return model, scores
+
+
 
 
 def create_model_for_region(path_to_region, model_out, scores_out, attribute="CODE"):
@@ -756,8 +772,33 @@ def create_model_for_region(path_to_region, model_out, scores_out, attribute="CO
     image_list = glob.glob(image_glob)
     model, scores = create_trained_model(image_list, attribute=attribute)
     joblib.dump(model, model_out)
+    log.info("Making file: {}".format(scores_out))
     with open(scores_out, 'w') as score_file:
         score_file.write(str(scores))
+        score_file = None
+
+
+def create_rf_model_for_region(path_to_region, model_out, attribute="CODE"):
+    """
+    Takes all .tif files in a given folder and creates a pickled scikit-learn random forest model.
+
+    Parameters
+    ----------
+    path_to_region : str
+        Path to the folder containing the tifs.
+    model_out : str
+        Path to location to save the .pkl file
+    scores_out : str
+        Path to save the cross-validation scores
+    attribute : str
+        The label of the field in the training shapefiles that contains the classification labels. Defaults to "CODE".
+
+    """
+    log.info("Create a random forest classification model for region based on tif/shp file pairs: {}".format(path_to_region))
+    image_glob = os.path.join(path_to_region, r"*.tif")
+    image_list = glob.glob(image_glob)
+    model = train_rf_model(image_list, model_out, ntrees = 101, attribute=attribute, weights = None)
+    return
 
 
 def create_model_from_signatures(sig_csv_path, model_out, sig_datatype=np.int32):
@@ -813,11 +854,43 @@ def load_signatures(sig_csv_path, sig_datatype=np.int32):
     data = np.genfromtxt(sig_csv_path, delimiter=",", dtype=sig_datatype).T
     return (data[1:, :].T, data[0, :])
 
+def get_shp_extent(shapefile):
+  '''
+  Get the extent of the first layer, the CRS and the EPSG code from a shapefile
 
-def get_training_data(image_path, shape_path, attribute="CODE", shape_projection_id=4326):
+  Args:
+    shapefile = path and filename of the shapefile *.shp
+
+  Returns:
+    extent of the shapefile
+    coordinate referencing system of the shapefile
+    EPSG code of the shapefile
+  '''
+  
+  driver = ogr.GetDriverByName("ESRI Shapefile")
+  ds = driver.Open(shapefile, 0)
+
+  # get extent
+  lyr = ds.GetLayer()
+  extent = lyr.GetExtent()
+
+  # get projection information
+  SpatialRef = lyr.GetSpatialRef()
+
+  # get EPSG code of the CRS
+  EPSG = SpatialRef.GetAttrValue("AUTHORITY", 1)
+  
+  # close file
+  ds = None
+
+  return(extent, SpatialRef, EPSG)
+
+
+def get_training_data(image_path, shape_path, attribute="CODE"):
     """
     Given an image and a shapefile with categories, returns training data and features suitable
-    for fitting a scikit-learn classifier.
+    for fitting a scikit-learn classifier.Image and shapefile must be in the same map projection / 
+    coordinate referencing system.
 
     For full details of how to create an appropriate shapefile, see [here](../index.html#training_data).
 
@@ -829,14 +902,12 @@ def get_training_data(image_path, shape_path, attribute="CODE", shape_projection
         The path to the shapefile containing labelled class polygons
     attribute : str, optional
         The shapefile field containing the class labels. Defaults to "CODE".
-    shape_projection_id : int, optional
-        The EPSG number of the projection of the shapefile. Defaults to EPSG 4326.
 
     Returns
     -------
     training_data : array_like
         A numpy array of shape (n_pixels, bands), where n_pixels is the number of pixels covered by the training polygons
-    features : array_like
+    training_pixels : array_like
         A 1-d numpy array of length (n_pixels) containing the class labels for the corresponding pixel in training_data
 
     Notes
@@ -847,44 +918,47 @@ def get_training_data(image_path, shape_path, attribute="CODE", shape_projection
     """
     # TODO: WRITE A TEST FOR THIS TOO; if this goes wrong, it'll go wrong
     # quietly and in a way that'll cause the most issues further on down the line
+    log.info("Get training data from {}".format(image_path))
+    log.info("                   and {}".format(shape_path))
     if not os.path.exists(image_path):
         log.error("{} not found.".format(image_path))
         sys.exit(1) 
     if not os.path.exists(shape_path):
         log.error("{} not found.".format(shape_path))
         sys.exit(1) 
-    log.info("Get training data from {}".format(image_path))
-    log.info("                   and {}".format(shape_path))
-    FILL_VALUE = -9999
+    # check that the two map projections have the same EPSG codes
+    image = gdal.Open(image_path)
+    epsg1 = osr.SpatialReference(wkt=image.GetProjection()).GetAttrValue('AUTHORITY',1)
+    shp_extent, shp_crs, epsg2 = get_shp_extent(shape_path)
+    if not epsg1 == epsg2:
+        log.error("EPSG codes of the image and shapefile are different. Aborting.")
+        log.error("   Image has EPSG: {}".format(epsg1))
+        log.error("   Image has EPSG: {}".format(epsg2))
+        image = None
+        return [], []
     with TemporaryDirectory() as td:
         shape_raster_path = os.path.join(td, os.path.basename(shape_path)[:-4]+"_rasterised")
         log.info("Shape raster path {}".format(shape_raster_path))
         shape_raster_path = shapefile_to_raster(shape_path, image_path, shape_raster_path, verbose=False, attribute=attribute, nodata=0)
-        image = gdal.Open(image_path)
         rasterised_shapefile = gdal.Open(shape_raster_path)
         shape_array = rasterised_shapefile.GetVirtualMemArray()
         shape_sparse = sp.coo_matrix(np.asarray(shape_array).squeeze())
-        y, x, features = sp.find(shape_sparse)
+        y, x, training_pixels = sp.find(shape_sparse)
         log.info("{} bands in image file".format(image.RasterCount))
-        log.info("{} features in shapefile".format(len(features)))
-        log.info("Image raster x size: {}".format(image.RasterXSize))
-        log.info("Image raster y size: {}".format(image.RasterYSize))
-        log.info("Shape raster x size: {}".format(rasterised_shapefile.RasterXSize))
-        log.info("Shape raster y size: {}".format(rasterised_shapefile.RasterYSize))
-        training_data = np.empty((len(features), image.RasterCount))
+        log.info("{} training pixels in shapefile".format(len(training_pixels)))
+        #log.info("Image raster x size: {}".format(image.RasterXSize))
+        #log.info("Image raster y size: {}".format(image.RasterYSize))
+        #log.info("Shape raster x size: {}".format(rasterised_shapefile.RasterXSize))
+        #log.info("Shape raster y size: {}".format(rasterised_shapefile.RasterYSize))
+        training_data = np.empty((len(training_pixels), image.RasterCount))
         image_array = image.GetVirtualMemArray()
-        image_view = image_array[:,
-                    0 : rasterised_shapefile.RasterYSize,
-                    0 : rasterised_shapefile.RasterXSize
-                    ]
-        for index in range(len(features)):
-            training_data[index, :] = image_view[:, y[index], x[index]]
-        image_view = None
+        for index in range(len(training_pixels)):
+            training_data[index, :] = image_array[:, y[index], x[index]]
         image_array = None
         shape_array = None
         image = None
         rasterised_shapefile = None
-        return training_data, features
+        return training_data, training_pixels
 
 
 def raster_reclass_binary(img_path, rcl_value, outFn, outFmt='GTiff', write_out=True):
@@ -942,7 +1016,7 @@ def raster_reclass_binary(img_path, rcl_value, outFn, outFmt='GTiff', write_out=
     return in_array
 
 
-def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, verbose=False, attribute="Class", nodata=0):
+def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, verbose=False, nodata=0, attribute="CODE"):
     '''
     Reads in a shapefile with polygons and produces a raster file that 
     aligns with an input rasterfile (same corner coordinates, resolution, coordinate 
@@ -964,22 +1038,22 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
     verbose : boolean
       True or False. If True, additional text output will be printed to the log file.
 
-    attribute : str
-      Name of the column of the attribute table of the shapefile that will be burned into the raster.
-
     nodata : int
       No data value.
 
+    attribute : str
+      Name of the column of the attribute table of the shapefile that will be burned into the raster.
+      If None, use the first attribute.
 
     Returns:
     ----------
     outraster_filename : str
     '''
 
-    log.info("Shapefile to Raster:")
-    log.info("  shapefile name {}".format(shapefilename))
-    log.info("  inrasterfile name {}".format(inraster_filename))
-    log.info("  outrasterfile name {}".format(outraster_filename))
+    #log.info("Shapefile to Raster:")
+    #log.info("  shapefile name {}".format(shapefilename))
+    #log.info("  inrasterfile name {}".format(inraster_filename))
+    #log.info("  outrasterfile name {}".format(outraster_filename))
     with TemporaryDirectory() as td:
         image = gdal.Open(inraster_filename)
         image_gt = image.GetGeoTransform()
@@ -1002,9 +1076,12 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
         band = target_ds.GetRasterBand(1)
         band.SetNoDataValue(nodata)
         band.FlushCache()
-        gdal.RasterizeLayer(target_ds, [1], inlayer, options=["ATTRIBUTE=CLASS"]) #.format(attribute)])
-        log.info("{} exists? {}".format(out_path, os.path.exists(out_path)))
-        log.info("{} exists? {}".format(os.path.dirname(shapefilename), os.path.exists(os.path.dirname(shapefilename))))
+        if attribute is not None:
+            gdal.RasterizeLayer(target_ds, [1], inlayer, options=["ATTRIBUTE={}".format(attribute)])
+        else:
+            gdal.RasterizeLayer(target_ds, [1], inlayer)
+        #log.info("{} exists? {}".format(out_path, os.path.exists(out_path)))
+        #log.info("{} exists? {}".format(os.path.dirname(shapefilename), os.path.exists(os.path.dirname(shapefilename))))
         shutil.move(out_path, outraster_filename)
         target_ds = None
         image = None
@@ -1012,44 +1089,155 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
         inlayer = None
     return outraster_filename
 
-def train_rf_model(raster, samples, modelfile, ntrees = 101, weights = None):
+
+
+def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", weights = None, balanced = True):
     '''
+    Adapted from pygge.py
+
     Trains a random forest classifier model based on a raster file with bands
       as features and a second raster file with training data, in which pixel
       values indicate the class.
 
     Args:
-      raster = filename and path to the raster file to be classified in tiff format
-      samples = filename and path to the raster file with the training samples 
-        as pixel values (in tiff format)
+      raster_paths = list of filenames and paths to the raster files to be classified in tiff format.
+        It is a condition that shapefiles of matching name exist in the same directory.      
       modelfile = filename and path to a pickle file to save the trained model to
-      ntrees (optional) = number of trees in the random forest, default = 101
+      ntrees = number of trees in the random forest, default = 101
+      attribute = string naming the attribute column to be rasterised in the shapefile
       weights (optional) = a list of integers giving weights for all classes. 
         If not specified, all weights will be equal.
+      balanced (optional) = if True, use a balanced number of training pixels per class
     
     Returns:
       random forest model object
     '''
 
-    # read in raster from geotiff
-    img_ds = io.imread(raster)
+    log.info("Collecting training data from all tif/shp file pairs.")
+    learning_data = None
+    for raster_path in raster_paths:
+        #check whether both the tiff file and the shapefile exist
+        if not os.path.exists(raster_path):
+            log.error("{} not found.".format(raster_path))
+            sys.exit(1) 
+        training_image_folder, training_image_name = os.path.split(raster_path)
+        training_image_name = training_image_name[:-4]  # Strip the file extension
+        shape_path_name = training_image_name + '.shp'
+        # find the full path to the shapefile, this can be in a subdirectory
+        shape_paths = [ f.path for f in os.scandir(training_image_folder) \
+                        if f.is_file() and os.path.basename(f) == shape_path_name ]
+        if len(shape_paths) == 0:
+            log.warning("{} not found. Skipping.".format(shape_path_name))
+        else:
+            if len(shape_paths) > 1:
+                log.warning("Several versions of {} exist. Using the first of these files.".format(shape_path_name))
+                for f in shape_paths:
+                    log.info("  {}".format(f))
+            shapefile_path = shape_paths[0]
+            image = gdal.Open(raster_path)
+            image_array = image.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly)
+            # check that the two map projections have the same EPSG codes
+            epsg1 = osr.SpatialReference(wkt=image.GetProjection()).GetAttrValue('AUTHORITY',1)
+            img_prj = image.GetProjection()
+            img_crs = osr.SpatialReference(wkt = img_prj)
+            shp_extent, shp_crs, epsg2 = get_shp_extent(shapefile_path)
+            log.info("EPSG codes of the image and shapefile: {}, {}".format(epsg1, epsg2))
+            log.info("  CRS of the image file: {}".format(img_crs))
+            log.info("  CRS of the shapefile: {}".format(shp_crs))
+            if img_crs != shp_crs:
+                log.warning("CRS of the image and shapefile are different. This can lead to misalignment of pixels and an inaccurate model.") 
+            if not epsg1 == epsg2:
+                log.warning("EPSG codes of the image and shapefile are different. Reprojecting shapefile.")
+                log.warning("   Image has EPSG    : {}".format(epsg1))
+                log.warning("   Shapefile has EPSG: {}".format(epsg2))
+                #TODO test this - reproject shapefile to raster EPSG
+                driver = ogr.GetDriverByName("ESRI Shapefile")
+                dataSource = driver.Open(shapefile_path, 1)
+                layer = dataSource.GetLayer()
+                sourceprj = layer.GetSpatialRef()
+                targetprj = osr.SpatialReference(wkt = image_prj)
+                transform = osr.CoordinateTransformation(sourceprj, targetprj)
+                to_fill = ogr.GetDriverByName("Esri Shapefile")
+                new_shapefile_path = shapefile_path[:-4]+"_"+str(epsg1)+".shp"
+                ds = to_fill.CreateDataSource(new_shapefile_path)
+                outlayer = ds.CreateLayer('', targetprj, ogr.wkbPolygon)
+                outlayer.CreateField(ogr.FieldDefn('id', ogr.OFTInteger))
+                outlayer.CreateField(ogr.FieldDefn(attribute, ogr.OFTInteger))
+                i = 0
+                for feature in layer:
+                    transformed = feature.GetGeometryRef()
+                    transformed.Transform(transform)
+                    geom = ogr.CreateGeometryFromWkb(transformed.ExportToWkb())
+                    defn = outlayer.GetLayerDefn()
+                    feat = ogr.Feature(defn)
+                    feat.SetField('id', i)
+                    feat.SetField(attribute, feature.GetField(attribute))
+                    feat.SetGeometry(geom)
+                    outlayer.CreateFeature(feat)
+                    i += 1
+                    feat = None
+                dataSource = None
+                ds = None
+                shapefile_path = new_shapefile_path
+                #image = None
+                #return [], []
+            log.info("Analysing shapefile: {}".format(shapefile_path))
+            with TemporaryDirectory() as td:
+                # rasterise the shapefile
+                shape_raster_path = os.path.join(td, os.path.basename(shapefile_path)[:-4]+"_rasterised.tif")
+                #log.info("Shape raster path {}".format(shape_raster_path))
+                shape_raster_path = shapefile_to_raster(shapefile_path, raster_path, shape_raster_path, verbose=False, nodata=0, attribute=attribute)
+                rasterised_shapefile = gdal.Open(shape_raster_path)
+                shape_array = rasterised_shapefile.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly)
+                # read in the class labels
+                labels = np.unique(shape_array[shape_array>0]) 
+                nclasses = labels.size # number of unique class values
+                log.info('The training data include {} classes: {}'.format(nclasses, labels))
+                log.info("{} bands in image file".format(image.RasterCount))
+                # compose the X,Y pixel positions (feature dataset and training dataset)
+                # 0 = missing class value
+                log.info(image_array.shape)
+                log.info(shape_array.shape)
+                X = image_array[:, shape_array > 0] 
+                Y = shape_array[shape_array > 0].flatten()     
+                log.info(X.shape)
+                log.info(Y.shape)
+                log.info("{} training pixels in shapefile".format(len(Y)))
+                image_array = None
+                shape_array = None
+                image = None
+                rasterised_shapefile = None
 
-    # convert to 16bit numpy array 
-    img = np.array(img_ds, dtype='int16')
+            if learning_data is None:
+                learning_data = X.transpose()
+                classes = Y
+            else:
+                log.info(learning_data.shape)
+                log.info(X.shape)
+                learning_data = np.append(learning_data, X.transpose(), 0)
+                classes = np.append(classes, Y)
 
-    # read in the training sample pixels 
-    roi_ds = io.imread(samples)   
-    roi = np.array(roi_ds, dtype='int8')  
-    
-    # read in the class labels
-    labels = np.unique(roi[roi > 0]) 
-    nclasses = labels.size # number of unique class values
-    print('The training data include {n} classes: {classes}'.format(n=nclasses, classes=labels))
+    log.info("Training pixels by class:")
+    smallest = 0
+    for c in labels:
+        found = len(classes[classes == c])
+        if found < smallest or smallest == 0:
+            smallest = found
+        log.info("  Class {} has {} training pixels".format(c, found))
 
-    # compose the X,Y pixel positions (feature dataset and training dataset)
-    # 0 = missing class value
-    X = img[roi > 0, :] 
-    Y = roi[roi > 0]     
+    if balanced:
+        indices = []
+        log.info("Drawing balanced random sample of {} training pixels for each class.".format(smallest))
+        for c in labels:
+            # draw a random sample of the list indices where that class is found
+            indices = indices + random.sample([pos for pos, value in enumerate(classes) if value == c], smallest)
+        classes = classes[indices]
+        learning_data = learning_data[indices]
+
+        log.info("After class balancing, training pixels by class:")
+        for c in labels:
+            found = len(classes[classes == c])
+            log.info("  Class {} has {} training pixels".format(c, found))
 
     # create a dictionary of class weights (class 1 has the weight 1, etc.)
     w = dict() # create an empty dictionary
@@ -1068,12 +1256,12 @@ def train_rf_model(raster, samples, modelfile, ntrees = 101, weights = None):
     # build the Random Forest Classifier 
     # for more information: http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
 
-    rf = RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4, 
+    rf = ens.RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4, 
                                 min_samples_split = 2, min_samples_leaf = 1, max_features = 'auto', 
                                 bootstrap = True, oob_score = True, n_jobs = 1, random_state = None, verbose = True)  
 
     # fit the model to the training data and the feature dataset
-    rf = rf.fit(X,Y)
+    rf = rf.fit(learning_data, classes)
 
     # export the Random Forest model to a file
     joblib.dump(rf, modelfile)
@@ -1084,108 +1272,64 @@ def train_rf_model(raster, samples, modelfile, ntrees = 101, weights = None):
     indices = np.argsort(importances)[::-1]
 
     # Print the feature ranking
-    print("Feature ranking:")
-    for f in range(X.shape[1]):
-        print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
-
-    # Plot the feature importances of the forest
-    plt.figure()
-    plt.title("Feature importances")
-    plt.bar(range(X.shape[1]), importances[indices], color="r", yerr=std[indices], align="center")
-    plt.xticks(range(X.shape[1]), indices)
-    plt.xlim([-1, X.shape[1]])
-    plt.show()
-    
-    # Out-of-bag error rate as a function of number of trees:
-    oob_error = [] # define an empty list with pairs of values
-    
-    # Range of `n_estimators` values to explore.
-    mintrees = 30 # this needs to be a sensible minimum number to get reliable OOB error estimates
-    maxtrees = max(mintrees, ntrees) # go all the way to the highest number of trees
-    nsteps = 5 # number of steps to calculate OOB error rate for (saves time)
-    
-    # work out the error rate for each number of trees in the random forest
-    for i in range(mintrees, maxtrees + 1, round((maxtrees - mintrees)/nsteps)): # start, end, step
-      rf.set_params(n_estimators=i)
-      rf.fit(X, Y)
-      oob_error.append((i, 1 - rf.oob_score_))
-
-    # Plot OOB error rate vs. number of trees
-    xs, ys = zip(*oob_error)
-    plt.plot(xs, ys)
-    # plt.xlim(0, maxtrees)
-    plt.xlabel("n_estimators")
-    plt.ylabel("OOB error rate")
-    # plt.legend(loc="upper right")
-    plt.show()
-
+    log.info("Feature ranking:")
+    for f in range(learning_data.shape[1]):
+        log.info("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
+   
     return(rf) # returns the random forest model object
 
-def classify_rf(raster, modelfile, outfile, verbose = False):
-  '''
-  Reads in a pickle file of a random forest model and a raster file with feature layers,
-    and classifies the raster file using the model.
 
-  Args:
-    raster = filename and path to the raster file to be classified (in tiff uint16 format)
-    modelfile = filename and path to the pickled file with the random forest model in uint8 format
-    outfile = filename and path to the output file with the classified map in uint8 format
-    verbose (optional) = True or False. If True, provides additional printed output.
-  '''
+def classify_rf(raster_path, modelfile, outfile, verbose = False):
+    '''
+    Reads in a pickle file of a random forest model and a raster file with feature layers,
+      and classifies the raster file using the model.
 
-  # Read Data    
-  src = rasterio.open(raster, 'r')   
-  img = src.read()
+    Args:
+      raster_path = filename and path to the raster file to be classified (in tiff uint16 format)
+      modelfile = filename and path to the pickled file with the random forest model in uint8 format
+      outfile = filename and path to the output file with the classified map in uint8 format
+      verbose (optional) = True or False. If True, provides additional printed output.
+    '''
 
-  if verbose:
-    print("img.shape = ", img.shape)
+    # Read Data    
+    image = gdal.Open(raster_path, 'r')   
+    image_array = image.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly)
+    if verbose:
+        log.info("image shape = {}".format(image.shape))
+    n = img.shape[0]
+    if verbose:
+        log.info(" {} bands".format(n))
+    # load your random forest model from the pickle file
+    clf = joblib.load(modelfile)    
+    # to work with SciKitLearn, we have to reshape the raster as an image
+    # this will change the shape from (bands, rows, columns) to (rows, columns, bands)
+    img = reshape_as_image(image_array)
+    # next, we have to reshape the image again into (rows * columns, bands)
+    # because that is what SciKitLearn asks for
+    new_shape = (img.shape[0] * img.shape[1], img.shape[2]) 
+    if verbose:
+        log.info("img[:, :, :n].shape = {}".format(img[:, :, :n].shape))
+        log.info("new_shape = {}".format(new_shape))
+    img_as_array = img[:, :, :n].reshape(new_shape)   
+    if verbose:
+        log.info("img_as_array.shape = {}".format(img_as_array.shape))
+    # classify it
+    class_prediction = clf.predict(img_as_array) 
+    # and reshape the flattened array back to its original dimensions
+    if verbose:
+        log.info("class_prediction.shape = {}".format(class_prediction.shape))
+        log.info("img[:, :, 0].shape = {}".format(img[:, :, 0].shape))
+    class_prediction = np.uint8(class_prediction.reshape(img[:, :, 0].shape))
+    if verbose:
+        log.info(class_prediction.dtype)
+    # save the image as a uint8 Geotiff file
+    tmpfile = rasterio.open(outfile, 'w', driver='Gtiff', 
+                            width=src.width, height=src.height,
+                            count=1, crs=src.crs, transform=src.transform, 
+                            dtype=np.uint8)
 
-  # get number of bands
-  n = img.shape[0]
+    tmpfile.write(class_prediction, 1)
 
-  if verbose:
-    print(n, " Bands")
-
-  # load your random forest model from the pickle file
-  clf = joblib.load(modelfile)    
-
-  # to work with SciKitLearn, we have to reshape the raster as an image
-  # this will change the shape from (bands, rows, columns) to (rows, columns, bands)
-  img = reshape_as_image(img)
-
-  # next, we have to reshape the image again into (rows * columns, bands)
-  # because that is what SciKitLearn asks for
-  new_shape = (img.shape[0] * img.shape[1], img.shape[2]) 
-
-  if verbose:
-    print("img[:, :, :n].shape = ", img[:, :, :n].shape)
-    print("new_shape = ", new_shape)
-
-  img_as_array = img[:, :, :n].reshape(new_shape)   
-
-  if verbose:
-    print("img_as_array.shape = ", img_as_array.shape)
-
-  # classify it
-  class_prediction = clf.predict(img_as_array) 
-
-  # and reshape the flattened array back to its original dimensions
-  if verbose:
-    print("class_prediction.shape = ", class_prediction.shape)
-    print("img[:, :, 0].shape = ", img[:, :, 0].shape)
-
-  class_prediction = np.uint8(class_prediction.reshape(img[:, :, 0].shape))
-
-  if verbose:
-    print(class_prediction.dtype)
-  
-  # save the image as a uint8 Geotiff file
-  tmpfile = rasterio.open(outfile, 'w', driver='Gtiff', 
-                          width=src.width, height=src.height,
-                          count=1, crs=src.crs, transform=src.transform, 
-                          dtype=np.uint8)
-
-  tmpfile.write(class_prediction, 1)
-
-  tmpfile.close()
+    tmpfile.close()
+    return  
 

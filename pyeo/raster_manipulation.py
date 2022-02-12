@@ -2257,7 +2257,8 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
                         shutil.move(mask_path, out_mask_path)
                         resample_image_in_place(out_mask_path, out_resolution)
 
-def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B02", "B03", "B04", "B08"], out_resolution=10, haze=None, skip_existing=False):
+
+def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B02", "B03", "B04", "B08"], out_resolution=10, haze=None, epsg=None, skip_existing=False):
     """
     For every .SAFE folder in l2_dir, creates a cloud-masked raster band for each selected band
     based on the SCL layer. Applies a rough haze correction based on thresholding the blue band (optional).
@@ -2279,6 +2280,8 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
     haze : number, optional
         Threshold if a haze filter is to be applied. If specified, all pixel values where "B02" > haze will be masked out.
         Defaults to None. If set, recommended thresholds range from 325 to 600 but can vary by scene conditions.   
+    epsg : int
+        EPSG code of the map projection / CRS if output rasters shall be reprojected (warped)
     skip_existing : boolean
         If True, skip cloud masking if a file already exists. If False, overwrite it.
 
@@ -2291,8 +2294,8 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
         log.info("  L2A raster file: {}".format(l2_safe_file))
         f = get_sen_2_granule_id(l2_safe_file)
         pattern = f.split("_")[0]+"_"+f.split("_")[1]+"_"+f.split("_")[2]+"_"+f.split("_")[3]+"_"+f.split("_")[4]+"_"+f.split("_")[5]
-        log.info("  Granule ID  : {}".format(f))
-        log.info("  File pattern: {}".format(pattern))
+        #log.info("  Granule ID  : {}".format(f))
+        #log.info("  File pattern: {}".format(pattern))
         df = get_raster_paths([out_dir], filepatterns=[pattern], dirpattern="")
         for i in range(len(df)):
             if df[pattern][i] != "" and skip_existing:
@@ -2301,20 +2304,32 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
             else:
                 with TemporaryDirectory(dir=os.getcwd()) as temp_dir:
                     temp_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + ".tif"
+                    temp_file_unprojected = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_unprojected.tif"
                     out_path = os.path.join(out_dir, os.path.basename(temp_file))
                     stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
                     mask_path = get_mask_path(temp_file)
                     create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
                     if haze is not None:
+                        log.info("Applying haze mask to pixels where B02 > {}".format(haze))
                         temp_file_2 = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_haze.tif"
                         apply_mask_to_image(mask_path, temp_file, temp_file_2)
                         mask_path_2 = get_mask_path(temp_file_2)
                         create_mask_from_band(temp_file_2, mask_path_2, band=1, threshold=haze, relation="smaller", buffer_size=buffer_size)
                         apply_mask_to_image(mask_path_2, temp_file_2, out_path)
-                        resample_image_in_place(out_path, out_resolution)
+                        resample_image_in_place(temp_file_unprojected, out_resolution)
                     else:
                         apply_mask_to_image(mask_path, temp_file, out_path)
-                        resample_image_in_place(out_path, out_resolution)
+                        resample_image_in_place(temp_file_unprojected, out_resolution)
+                    if epsg is not None:
+                        log.info("Reprojecting stacked and masked image to EPSG code {}".format(epsg))
+                        proj = osr.SpatialReference()
+                        proj.ImportFromEPSG(epsg)
+                        wkt = proj.ExportToWkt()
+                        reproject_image(temp_file_unprojected, out_path, wkt)
+                    else:
+                        shutil.move(temp_file_unprojected, out_path)
+    return
+
 
 
 
