@@ -3763,6 +3763,22 @@ def combine_date_maps(date_image_paths, output_product):
 
     date_images = [gdal.Open(path) for path in date_image_paths]
 
+    # ensure the images have the same map projection
+    reference_projection = date_images[0].GetProjection()
+    different_projection = []
+    for index, date_image in enumerate(date_images):
+        projection = date_image.GetProjection()
+        if projection != reference_projection:
+            log.warning("Skipping image with a different map projection: {} is not the same as {}".format(date_image, date_images[0]))
+            different_projection = different_projection + date_image
+    for image in different_projection:
+        date_images.remove(image)
+    if len(date_images) == 0:
+        log.warning("No valid input files remain for report image creation.")
+        date_images = None
+        return
+
+
     out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
     # Squeeze() to account for unaccountable extra dimension Windows patch adds
     out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write).squeeze()
