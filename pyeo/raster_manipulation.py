@@ -3763,26 +3763,16 @@ def combine_date_maps(date_image_paths, output_product):
 
     date_images = [gdal.Open(path) for path in date_image_paths]
 
-    #TODO: ********************************Ensure that all date images have the same dimensions and EPSG code
-    '''
-    if len(raster_paths) <= 1:
-        raise StackImagesException("stack_images requires at least two input images")
-    rasters = [gdal.Open(raster_path) for raster_path in raster_paths]
-    total_layers = sum(raster.RasterCount for raster in rasters)
-    projection = rasters[0].GetProjection()
-    in_gt = rasters[0].GetGeoTransform()
-    x_res = in_gt[1]
-    y_res = in_gt[5]*-1   # Y resolution in affine geotransform is -ve for Maths reasons
-    combined_polygons = get_combined_polygon(rasters, geometry_mode)
-
-    reproject_image(in_raster, out_raster_path, new_projection,  driver = "GTiff",  memory = 2e3, do_post_resample=True)
-    '''
-
     out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
     # Squeeze() to account for unaccountable extra dimension Windows patch adds
     out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write).squeeze()
     out_raster_array[:, :, :] = 0 # [bands, y, x]
+    reference_projection = date_images[0].GetProjection()
     for index, date_image in enumerate(date_images):
+        projection = date_image.GetProjection()
+        if projection != reference_projection:
+            log.warning("Skipping image with a different map projection: {} is not the same as {}".format(date_image, date_images[0]))
+            continue
         date_array = date_image.GetVirtualMemArray().squeeze()
         locs = ( (out_raster_array[0, :, :] > 0) & (date_array > 0) )
         out_raster_array[0, locs] = np.minimum(out_raster_array[0, locs], date_array[locs])
@@ -3792,11 +3782,10 @@ def combine_date_maps(date_image_paths, output_product):
         #log.info("Types: {} and {}".format(type(out_raster_array[1, 0, 0]), type(date_mask[0,0]))
         out_raster_array[1, :, :] = np.add(out_raster_array[1, :, :], date_mask)
         date_array = None
-        date_mask
+        date_mask = None
     out_raster_array = None
     out_raster = None
     date_images = None
-
     return output_product
 
 
