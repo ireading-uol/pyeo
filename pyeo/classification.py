@@ -108,7 +108,7 @@ def change_from_composite(image_path, composite_path, model_path, class_out_path
 
 
 def classify_image(image_path, model_path, class_out_path, prob_out_path=None, apply_mask=False,
-                   out_format="GTiff", num_chunks=4, nodata=0, skip_existing = False):
+                   out_format="GTiff", chunks=4, nodata=0, skip_existing = False):
     """
 
     Produces a class map from a raster and a model.
@@ -131,7 +131,7 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
         If True, uses the .msk file corresponding to the image at image_path to skip any invalid pixels. Default False.
     out_type : str, optional
         The raster format of the class image. Defaults to "GTiff" (geotif). See gdal docs for valid types.
-    num_chunks : int, optional
+    chunks : int, optional
         The number of chunks the image is broken into prior to classification. The smaller this number, the faster
         classification will run - but the more likely you are to get a outofmemory error. Default 10.
     nodata : int, optional
@@ -168,10 +168,10 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     except RuntimeError as e:
         log.info("Exception: {}".format(e))
         exit(1)
-    if num_chunks == None:
+    if chunks == None:
         log.info("No chunk size given, attempting autochunk.")
-        num_chunks = autochunk(image)
-        log.info("Autochunk to {} chunks".format(num_chunks))
+        chunks = autochunk(image)
+        log.info("Autochunk to {} chunks".format(chunks))
     try:
         model = sklearn_joblib.load(model_path)
     except KeyError as e:
@@ -224,13 +224,13 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     classes = np.full(n_good_samples, nodata, dtype=np.ubyte)
     if prob_out_path:
         probs = np.full((n_good_samples, model.n_classes_), nodata, dtype=np.float32)
-    chunk_size = int(n_good_samples / num_chunks)
-    chunk_resid = n_good_samples - (chunk_size * num_chunks)
-    log.info("   Number of chunks {} Chunk size {} Chunk residual {}".format(num_chunks, chunk_size, chunk_resid))
+    chunk_size = int(n_good_samples / chunks)
+    chunk_resid = n_good_samples - (chunk_size * chunks)
+    log.info("   Number of chunks {} Chunk size {} Chunk residual {}".format(chunks, chunk_size, chunk_resid))
     # The chunks iterate over all values in the array [x * y, bands] always with all bands per chunk
-    for chunk_id in range(num_chunks):
+    for chunk_id in range(chunks):
         offset = chunk_id * chunk_size
-        if chunk_id == num_chunks - 1:
+        if chunk_id == chunks - 1:
             chunk_size = chunk_size + chunk_resid
         log.info("   Classifying chunk {} of size {}".format(chunk_id+1, chunk_size))
         chunk_view = good_samples[offset : offset + chunk_size]
@@ -497,7 +497,7 @@ def autochunk(dataset, mem_limit=None):
 
 
 def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
-                       apply_mask=False, out_type="GTiff", num_chunks=4, skip_existing=False):
+                       apply_mask=False, out_type="GTiff", chunks=4, skip_existing=False):
     """
     Classifies every file ending in .tif in in_dir using model at model_path. Outputs are saved
     in class_out_dir and prob_out_dir, named [input_name]_class and _prob, respectively.
@@ -519,7 +519,7 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
         If present, uses the corresponding .msk files to mask the directories. Defaults to True.
     out_type : str, optional
         The raster format of the class image. Defaults to "GTiff" (geotif). See gdal docs for valid datatypes.
-    num_chunks : int, optional
+    chunks : int, optional
         The number of chunks to break each image into for processing. See :py:func:`classify_image`
     skip_existing : boolean, optional
         If True, skips the classification if the output file already exists.
@@ -543,7 +543,7 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
                        prob_out_path = prob_out_path,
                        apply_mask = apply_mask, 
                        out_format = out_type, 
-                       num_chunks = num_chunks, 
+                       chunks = chunks, 
                        skip_existing=skip_existing)
 
 

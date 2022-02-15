@@ -1331,7 +1331,7 @@ def reproject_directory(in_dir, out_dir, new_projection, extension = '.tif'):
     image_paths = [os.path.join(in_dir, image_path) for image_path in os.listdir(in_dir) if image_path.endswith(extension)]
     for image_path in image_paths:
         reproj_path = os.path.join(out_dir, os.path.basename(image_path))
-        log.info("Reprojecting {} to projection with EPSG code {}, storing in {}".format(image_path, reproj_path, new_projection))
+        #log.info("Reprojecting {} to projection with EPSG code {}, storing in {}".format(image_path, reproj_path, new_projection))
         reproject_image(image_path, reproj_path, new_projection)
 
 
@@ -1771,10 +1771,15 @@ def resample_image_in_place(image_path, new_res):
         Pixel edge size in meters
 
     """
-    # I don't like using a second object here, but hey.
+    image = gdal.Open(image_path, gdal.GA_ReadOnly) 
+    if image.RasterXSize == new_res and image.RasterYSize == new_res:
+        log.info("Image already has {}m resolution: {}".format(new_res, image_path))
+        image = None
+        return
+    image = None
+    log.info("Resampling to {}m resolution: {}".format(new_res, image_path))
     with TemporaryDirectory(dir=os.getcwd()) as td:
-        #log.info("Making temp dir {}".format(td))
-        # Remember this is used for masks, so any averging resample strat will cock things up.
+        # Remember this is used for masks, so any averaging resample strat will cock things up.
         args = gdal.WarpOptions(
             xRes=new_res,
             yRes=new_res
@@ -1782,12 +1787,13 @@ def resample_image_in_place(image_path, new_res):
         temp_image = os.path.join(td, "temp_image.tif")
         gdal.Warp(temp_image, image_path, options=args)
 
-        # Urrrgh. Stupid Windows permissions.
+        # Windows permissions.
         if sys.platform.startswith("win"):
             os.remove(image_path)
             shutil.copy(temp_image, image_path)
         else:
             shutil.move(temp_image, image_path)
+    return
 
 
 def align_image_in_place(image_path, target_path):
@@ -2231,12 +2237,11 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
             else:
                 stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
 
-                log.info("Creating cloudmask for {}".format(temp_file))
+                log.info("Creating cloud mask for {}".format(temp_file))
                 l1_safe_file = get_l1_safe_file(l2_safe_file, l1_dir)
                 if l1_safe_file:
                     mask_path = get_mask_path(temp_file)
                     create_mask_from_sen2cor_and_fmask(l1_safe_file, l2_safe_file, mask_path, buffer_size=buffer_size)
-                    log.info("Cloudmask created")
                     out_mask_path = os.path.join(out_dir, os.path.basename(mask_path))
                 else:
                     log.error("No L1 data found for {}; cannot generate cloudmask.".format(l2_safe_file))
@@ -2251,7 +2256,7 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
                         reproject_image(mask_path, out_mask_path, wkt)
                         resample_image_in_place(out_mask_path, out_resolution)
                 else:
-                    log.info("Moving images to {}".format(out_dir))
+                    #log.info("Moving images to {}".format(out_dir))
                     shutil.move(temp_file, out_path)
                     if l1_safe_file:
                         shutil.move(mask_path, out_mask_path)
@@ -2302,32 +2307,30 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
                 log.info("  Skipping band merging for: {}".format(f))
                 log.info("  Found stacked file: {}".format(df[pattern][i][0]))
             else:
+                out_path = os.path.join(out_dir, get_sen_2_granule_id(l2_safe_file) + ".tif")
                 with TemporaryDirectory(dir=os.getcwd()) as temp_dir:
-                    temp_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + ".tif"
-                    temp_file_unprojected = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_unprojected.tif"
-                    out_path = os.path.join(out_dir, os.path.basename(temp_file))
-                    stack_sentinel_2_bands(l2_safe_file, temp_file, bands=bands, out_resolution=out_resolution)
-                    mask_path = get_mask_path(temp_file)
+                    stacked_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file) + "_stacked.tif")
+                    masked_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file) + "_stacked_masked.tif")
+                    stack_sentinel_2_bands(l2_safe_file, stacked_file, bands=bands, out_resolution=out_resolution)
+                    mask_path = get_mask_path(stacked_file)
                     create_mask_from_scl_layer(l2_safe_file, mask_path, scl_classes, buffer_size=buffer_size)
+                    apply_mask_to_image(mask_path, stacked_file, masked_file)
                     if haze is not None:
-                        log.info("Applying haze mask to pixels where B02 > {}".format(haze))
-                        temp_file_2 = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + "_haze.tif"
-                        apply_mask_to_image(mask_path, temp_file, temp_file_2)
-                        mask_path_2 = get_mask_path(temp_file_2)
-                        create_mask_from_band(temp_file_2, mask_path_2, band=1, threshold=haze, relation="smaller", buffer_size=buffer_size)
-                        apply_mask_to_image(mask_path_2, temp_file_2, out_path)
-                        resample_image_in_place(temp_file_unprojected, out_resolution)
-                    else:
-                        apply_mask_to_image(mask_path, temp_file, out_path)
-                        resample_image_in_place(temp_file_unprojected, out_resolution)
+                        log.info("Applying haze mask to pixels where B02 > {}. Assumes B02 is band 1 in the stacked image.".format(haze))
+                        haze_masked_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file) + "_stacked_masked_haze.tif")
+                        haze_mask_path = get_mask_path(haze_masked_file)
+                        create_mask_from_band(masked_file, haze_mask_path, band=1, threshold=haze, relation="smaller", buffer_size=buffer_size)
+                        apply_mask_to_image(haze_mask_path, masked_file, haze_masked_file)
+                        shutil.move(haze_masked_file, masked_file)
+                    resample_image_in_place(masked_file, out_resolution)
                     if epsg is not None:
                         log.info("Reprojecting stacked and masked image to EPSG code {}".format(epsg))
                         proj = osr.SpatialReference()
                         proj.ImportFromEPSG(epsg)
                         wkt = proj.ExportToWkt()
-                        reproject_image(temp_file_unprojected, out_path, wkt)
+                        reproject_image(masked_file, out_path, wkt)
                     else:
-                        shutil.move(temp_file_unprojected, out_path)
+                        shutil.move(masked_file, out_path)
     return
 
 
@@ -2375,7 +2378,7 @@ def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, 
     first_ls_array = None
     first_ls_raster = None
     for ii, ls_raster_path in enumerate(band_path_list):
-        log.info("Stacking {} to raster layer {}".format(ls_raster_path, ii))
+        #log.info("Stacking {} to raster layer {}".format(ls_raster_path, ii))
         ls_raster = gdal.Open(ls_raster_path)
         ls_array = ls_raster.GetVirtualMemArray()
         out_array[ii, ...] = ls_array[...]
@@ -2386,14 +2389,14 @@ def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, 
     if new_projection:
         with TemporaryDirectory(dir=os.getcwd()) as td:
             #log.info("Making temp dir {}".format(td))
-            log.info("Reprojecting to {}")
+            #log.info("Reprojecting to {}")
             temp_path = os.path.join(td, "reproj_temp.tif")
-            log.info("Temporary image path at {}".format(temp_path))
+            #log.info("Temporary image path at {}".format(temp_path))
             reproject_image(out_image_path, temp_path, new_projection, do_post_resample = False)
             os.remove(out_image_path)
             os.rename(temp_path, out_image_path)
             resample_image_in_place(out_image_path, 30)
-    log.info("Stacked image at {}".format(out_image_path))
+    #log.info("Stacked image at {}".format(out_image_path))
 
 
 def stack_sentinel_2_bands(safe_dir, out_image_path, bands=("B02", "B03", "B04", "B08"), out_resolution=10):
@@ -2426,7 +2429,6 @@ def stack_sentinel_2_bands(safe_dir, out_image_path, bands=("B02", "B03", "B04",
         new_band_paths = []
         for band_path in band_paths:
             if get_image_resolution(band_path) != out_resolution:
-                log.info("Resampling {} to {}m resolution".format(band_path, out_resolution))
                 resample_path = os.path.join(resample_dir, os.path.basename(band_path))
                 shutil.copy(band_path, resample_path)
                 resample_image_in_place(resample_path, out_resolution)  # why did I make this the only in-place function?
@@ -2924,7 +2926,6 @@ def create_mask_from_scl_layer(l2_safe_path, out_path, scl_classes, buffer_size=
     mask_image_array = None
     scl_image = None
     mask_image = None
-    log.info("Resampling image in place")
     resample_image_in_place(out_path, 10)
     if buffer_size:
         buffer_mask_in_place(out_path, buffer_size)
@@ -3260,16 +3261,12 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
 
     """
     log = logging.getLogger(__name__)
-    
-    log.info("Applying mask {} to raster image {}.".format(mask_path, image_path))
-    
+    #log.info("Applying mask {} to raster image {}.".format(mask_path, image_path))
     mask = gdal.Open(mask_path)
     if mask == None:
         raise FileNotFoundError("Mask not found: {}".format(mask_path))
-        
     # make the name of the masked output image
-    log.info("   masked raster image will be created at {}.".format(masked_image_path))
-    
+    #log.info("   masked raster image will be created at {}.".format(masked_image_path))
     # gdal read raster as array
     image_as_array = raster2array(image_path)
     # reproject the mask into the same shape and projection as the raster file if necessary
@@ -3305,7 +3302,6 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
                 mask = gdal.Open(mask_path, gdal.GA_Update)
         else:
             # copy the geotransform of the raster to the mask for consistency
-            #TODO: test this
             mask.SetGeoTransform(geotransform_of_image)
 
     geotransform_of_mask = mask.GetGeoTransform()
@@ -3321,7 +3317,6 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
             log.warning(geotransform_of_image)
         else:
             # copy the geotransform of the raster to the mask for consistency
-            #TODO: test this
             mask.SetGeoTransform(geotransform_of_image)
     mask_as_array = raster2array(mask_path)
     for band in range(bands):
@@ -3754,11 +3749,34 @@ def combine_date_maps(date_image_paths, output_product):
     '''
 
     log = logging.getLogger(__name__)
-    try:
-        date_images = [gdal.Open(path) for path in date_image_paths]
-    except FileNotFoundError as e:
-        log.error("No images found: {} {}".format(date_image_paths, e))
+    # check which files in the list of input files are not found
+    notfound = []
+    for path in date_image_paths:
+        if not os.path.exists(path):
+            log.warning("Change detection image does not exist and will be removed from the report creation: {}".format(path))
+            notfound = notfound + [path]
+    for path in notfound:
+        date_image_paths.remove(path)
+    if len(date_image_paths) == 0:
+        log.warning("No valid input files remain for report image creation.")
         return
+
+    date_images = [gdal.Open(path) for path in date_image_paths]
+
+    #TODO: ********************************Ensure that all date images have the same dimensions and EPSG code
+    '''
+    if len(raster_paths) <= 1:
+        raise StackImagesException("stack_images requires at least two input images")
+    rasters = [gdal.Open(raster_path) for raster_path in raster_paths]
+    total_layers = sum(raster.RasterCount for raster in rasters)
+    projection = rasters[0].GetProjection()
+    in_gt = rasters[0].GetGeoTransform()
+    x_res = in_gt[1]
+    y_res = in_gt[5]*-1   # Y resolution in affine geotransform is -ve for Maths reasons
+    combined_polygons = get_combined_polygon(rasters, geometry_mode)
+
+    reproject_image(in_raster, out_raster_path, new_projection,  driver = "GTiff",  memory = 2e3, do_post_resample=True)
+    '''
 
     out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
     # Squeeze() to account for unaccountable extra dimension Windows patch adds

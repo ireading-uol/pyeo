@@ -45,7 +45,7 @@ def rolling_detection(config_path,
                       arg_start_date=None,
                       arg_end_date=None,
                       tile_id=None,
-                      num_chunks=None,
+                      chunks=None,
                       build_composite=False,
                       do_download=False,
                       download_source="scihub",
@@ -326,7 +326,7 @@ def rolling_detection(config_path,
             log.info("Building initial cloud-free median composite from directory {}".format(composite_l2_masked_image_dir))
             pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir, 
                                                                 composite_dir, 
-                                                                chunks=5,
+                                                                chunks=chunks,
                                                                 generate_date_images=True,
                                                                 missing_data_value=0)
 
@@ -489,7 +489,7 @@ def rolling_detection(config_path,
                                                    prob_out_dir = None, 
                                                    apply_mask=False, 
                                                    out_type="GTiff", 
-                                                   num_chunks=4,
+                                                   chunks=chunks,
                                                    skip_existing=skip_existing)
             pyeo.classification.classify_directory(l2_masked_image_dir,
                                                    model_path,
@@ -497,7 +497,7 @@ def rolling_detection(config_path,
                                                    prob_out_dir = None, 
                                                    apply_mask=False, 
                                                    out_type="GTiff", 
-                                                   num_chunks=4,
+                                                   chunks=chunks,
                                                    skip_existing=skip_existing)
             log.info("End of classification.")
 
@@ -776,7 +776,7 @@ if __name__ == "__main__":
                              "config file.")
     parser.add_argument("--tile", dest="tile_id", type=str, default="None", help="Overrides the geojson location with a"
                                                                                   "Sentinel-2 tile ID location")
-    parser.add_argument("--chunks", dest="num_chunks", type=int, default=10, help="Sets the number of chunks to split "
+    parser.add_argument("--chunks", dest="chunks", type=int, default=10, help="Sets the number of chunks to split "
                                                                                   "images to in ml processing")
     parser.add_argument('-d', '--download', dest='do_download', action='store_true', default=False,
                         help='If present, perform the query and download level 1 images.')
@@ -805,7 +805,7 @@ if __name__ == "__main__":
     max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
     from_classes = [1]          #find subsequent changes from any of these classes
     to_classes = [2,3,4,5,7,11] #                          to any of these classes
-    skip_existing = False       # skip existing image products from processing
+    skip_existing = True        # skip existing image products from processing
     faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded
 
     '''
