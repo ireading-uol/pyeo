@@ -1118,8 +1118,8 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
     for raster_path in raster_paths:
         #check whether both the tiff file and the shapefile exist
         if not os.path.exists(raster_path):
-            log.error("{} not found.".format(raster_path))
-            sys.exit(1) 
+            log.warning("{} not found. Skipping.".format(raster_path))
+            continue
         training_image_folder, training_image_name = os.path.split(raster_path)
         training_image_name = training_image_name[:-4]  # Strip the file extension
         shape_path_name = training_image_name + '.shp'
@@ -1142,12 +1142,13 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
             img_crs = osr.SpatialReference(wkt = img_prj)
             shp_extent, shp_crs, epsg2 = get_shp_extent(shapefile_path)
             log.info("EPSG codes of the image and shapefile: {}, {}".format(epsg1, epsg2))
-            log.info("  CRS of the image file: {}".format(img_crs))
-            log.info("  CRS of the shapefile: {}".format(shp_crs))
+            #log.info("  CRS of the image file: {}".format(img_crs))
+            #log.info("  CRS of the shapefile: {}".format(shp_crs))
             if img_crs != shp_crs:
-                log.warning("CRS of the image and shapefile are different. This can lead to misalignment of pixels and an inaccurate model.") 
+                #log.warning("CRS of the image and shapefile are different. This can lead to misalignment of pixels and an inaccurate model.") 
+                pass
             if not epsg1 == epsg2:
-                log.warning("EPSG codes of the image and shapefile are different. Reprojecting shapefile.")
+                log.warning("Reprojecting shapefile. The EPSG codes of the image and shapefile are different.")
                 log.warning("   Image has EPSG    : {}".format(epsg1))
                 log.warning("   Shapefile has EPSG: {}".format(epsg2))
                 #TODO test this - reproject shapefile to raster EPSG
@@ -1155,7 +1156,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 dataSource = driver.Open(shapefile_path, 1)
                 layer = dataSource.GetLayer()
                 sourceprj = layer.GetSpatialRef()
-                targetprj = osr.SpatialReference(wkt = image_prj)
+                targetprj = osr.SpatialReference(wkt = img_prj)
                 transform = osr.CoordinateTransformation(sourceprj, targetprj)
                 to_fill = ogr.GetDriverByName("Esri Shapefile")
                 new_shapefile_path = shapefile_path[:-4]+"_"+str(epsg1)+".shp"
@@ -1196,34 +1197,35 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 log.info("{} bands in image file".format(image.RasterCount))
                 # compose the X,Y pixel positions (feature dataset and training dataset)
                 # 0 = missing class value
-                log.info(image_array.shape)
-                log.info(shape_array.shape)
+                #log.info(image_array.shape)
+                #log.info(shape_array.shape)
                 X = image_array[:, shape_array > 0] 
                 Y = shape_array[shape_array > 0].flatten()     
-                log.info(X.shape)
-                log.info(Y.shape)
+                #log.info(X.shape)
+                #log.info(Y.shape)
                 log.info("{} training pixels in shapefile".format(len(Y)))
                 image_array = None
                 shape_array = None
                 image = None
                 rasterised_shapefile = None
 
-            if learning_data is None:
+            if raster_path == raster_paths[0]:
                 learning_data = X.transpose()
                 classes = Y
             else:
-                log.info(learning_data.shape)
-                log.info(X.shape)
+                #log.info(learning_data.shape)
+                #log.info(X.shape)
                 learning_data = np.append(learning_data, X.transpose(), 0)
                 classes = np.append(classes, Y)
 
+    log.info("Training data collection complete.")
     log.info("Training pixels by class:")
     smallest = 0
     for c in labels:
         found = len(classes[classes == c])
+        log.info("  Class {} has {} training pixels".format(c, found))
         if found < smallest or smallest == 0:
             smallest = found
-        log.info("  Class {} has {} training pixels".format(c, found))
 
     if balanced:
         indices = []
