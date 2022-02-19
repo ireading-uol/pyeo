@@ -40,7 +40,8 @@ from scipy import sparse as sp
 import shutil
 from sklearn import ensemble as ens
 from sklearn.externals import joblib as sklearn_joblib
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn import metrics
 
 from pyeo.coordinate_manipulation import get_local_top_left
 from pyeo.filesystem_utilities import get_mask_path
@@ -695,7 +696,7 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 10, attr
     .. code:: python
 
         model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55,
-            min_samples_leaf=2, min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
+            min_samples_leaf=2, min_samples_split=16, n_estimators=100, n_jobs=-1, class_weight='balanced')
 
     """
     #TODO: This could be optimised by pre-allocating the training array.
@@ -741,7 +742,7 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 10, attr
     '''
 
     model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
-                                     min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
+                                     min_samples_split=16, n_estimators=100, n_jobs=-1, class_weight='balanced')
     model.fit(learning_data, classes)
     scores = cross_val_score(model, learning_data, classes, scoring='accuracy', cv=cross_val_repeats)
     log.info("Accuracy: {.3f} ({.3f})".format(np.mean(scores), np.std(scores)))
@@ -778,7 +779,7 @@ def create_model_for_region(path_to_region, model_out, scores_out, attribute="CO
         score_file = None
 
 
-def create_rf_model_for_region(path_to_region, model_out, attribute="CODE"):
+def create_rf_model_for_region(path_to_region, model_out, attribute="CODE", gridsearch=1, k_fold=5):
     """
     Takes all .tif files in a given folder and creates a pickled scikit-learn random forest model.
 
@@ -792,12 +793,16 @@ def create_rf_model_for_region(path_to_region, model_out, attribute="CODE"):
         Path to save the cross-validation scores
     attribute : str
         The label of the field in the training shapefiles that contains the classification labels. Defaults to "CODE".
+    gridsearch : int, optional
+        Number of randomized random forests for gridsearch. Defaults to 1.
+    k_fold : int, optional
+        Number of groups for k-fold validation during gridsearch. Defaults to 5.
 
     """
     log.info("Create a random forest classification model for region based on tif/shp file pairs: {}".format(path_to_region))
     image_glob = os.path.join(path_to_region, r"*.tif")
     image_list = glob.glob(image_glob)
-    model = train_rf_model(image_list, model_out, ntrees = 101, attribute=attribute, weights = None)
+    model = train_rf_model(image_list, model_out, ntrees = 101, attribute=attribute, weights = None, gridsearch=gridsearch)
     return
 
 
@@ -822,12 +827,12 @@ def create_model_from_signatures(sig_csv_path, model_out, sig_datatype=np.int32)
     .. code:: python
     
         model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
-              min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
+              min_samples_split=16, n_estimators=100, n_jobs=-1, class_weight='balanced')
 
 
     """
     model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
-                                     min_samples_split=16, n_estimators=100, n_jobs=4, class_weight='balanced')
+                                     min_samples_split=16, n_estimators=100, n_jobs=-1, class_weight='balanced')
     features, labels = load_signatures(sig_csv_path, sig_datatype)
     model.fit(features, labels)
     joblib.dump(model, model_out)
@@ -1091,7 +1096,7 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
 
 
 
-def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", weights = None, balanced = True):
+def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", weights = None, balanced = True, gridsearch = 1, k_fold=5):
     '''
     Adapted from pygge.py
 
@@ -1108,13 +1113,16 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
       weights (optional) = a list of integers giving weights for all classes. 
         If not specified, all weights will be equal.
       balanced (optional) = if True, use a balanced number of training pixels per class
+      gridsearch : int, optional = Number of randomized random forests for gridsearch. Defaults to 1.
+      k_fold : int, optional = Number of groups for k-fold validation during gridsearch. Defaults to 5.
     
     Returns:
       random forest model object
     '''
 
     log.info("Collecting training data from all tif/shp file pairs.")
-    learning_data = None
+    learning_data = []
+    labels = []
     for raster_path in raster_paths:
         #check whether both the tiff file and the shapefile exist
         if not os.path.exists(raster_path):
@@ -1180,8 +1188,6 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 dataSource = None
                 ds = None
                 shapefile_path = new_shapefile_path
-                #image = None
-                #return [], []
             log.info("Analysing shapefile: {}".format(shapefile_path))
             with TemporaryDirectory() as td:
                 # rasterise the shapefile
@@ -1191,9 +1197,10 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 rasterised_shapefile = gdal.Open(shape_raster_path)
                 shape_array = rasterised_shapefile.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly)
                 # read in the class labels
-                labels = np.unique(shape_array[shape_array>0]) 
-                nclasses = labels.size # number of unique class values
-                log.info('The training data include {} classes: {}'.format(nclasses, labels))
+                these_labels = list(np.unique(shape_array[shape_array>0]))
+                nclasses = len(these_labels)
+                labels = labels + these_labels
+                log.info('This training data shapefile includes {} classes: {}'.format(nclasses, these_labels))
                 log.info("{} bands in image file".format(image.RasterCount))
                 # compose the X,Y pixel positions (feature dataset and training dataset)
                 # 0 = missing class value
@@ -1209,7 +1216,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 image = None
                 rasterised_shapefile = None
 
-            if raster_path == raster_paths[0]:
+            if learning_data == []:
                 learning_data = X.transpose()
                 classes = Y
             else:
@@ -1218,6 +1225,8 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 learning_data = np.append(learning_data, X.transpose(), 0)
                 classes = np.append(classes, Y)
 
+    # get unique list of all class labels
+    labels = list(dict.fromkeys(labels))
     log.info("Training data collection complete.")
     log.info("Training pixels by class:")
     smallest = 0
@@ -1229,10 +1238,13 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
 
     if balanced:
         indices = []
-        log.info("Drawing balanced random sample of {} training pixels for each class.".format(smallest))
+        log.info("Drawing a more balanced random sample of {} training pixels for each class.".format(smallest))
         for c in labels:
             # draw a random sample of the list indices where that class is found
-            indices = indices + random.sample([pos for pos, value in enumerate(classes) if value == c], smallest)
+            if len([pos for pos, value in enumerate(classes) if value == c]) > smallest:
+                indices = indices + random.sample([pos for pos, value in enumerate(classes) if value == c], 10*smallest)
+            else:
+                indices = indices + [pos for pos, value in enumerate(classes) if value == c]
         classes = classes[indices]
         learning_data = learning_data[indices]
 
@@ -1255,15 +1267,83 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
           else:
             w[i+1] = weights[i] # assign the weights if specified by the user
 
+    # Split the data into training and testing datasets
+    training, testing, training_classes, testing_classes = train_test_split(learning_data, classes, test_size = .25, random_state = 101)
+    # This function does not normalize the data. If this was added, then the new data for classification would
+    # have to be normalized in the same way.
+    #sc = StandardScaler()
+    #normed_train_data = pd.DataFrame(sc.fit_transform(training), columns = X.columns)
+    #normed_test_data = pd.DataFrame(sc.fit_transform(testing), columns = X.columns)
+    
+    if gridsearch > 1:
+        log.info("Grid search: Finding optimal parameter space for the random forest from {} forests.".format(gridsearch))
+        # create a dictionary of values to choose from
+        # inspired by https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
+        n_estimators = np.linspace(100, 500, int((500-100)/200) + 1, dtype=int)
+        max_features = ['auto', 'sqrt']
+        max_depth = [2, 10, 50, 100, 150, 200]
+        min_samples_split = [int(x) for x in np.linspace(start = 2, stop = 10, num = 9)]
+        min_samples_leaf = [1, 2, 3, 4]
+        bootstrap = [True, False]
+        criterion=['gini', 'entropy']
+        grid = {'n_estimators': n_estimators,
+                'max_features': max_features,
+                'max_depth': max_depth,
+                'min_samples_split': min_samples_split,
+                'min_samples_leaf': min_samples_leaf,
+                'bootstrap': bootstrap,
+                'criterion': criterion}
+        # Begin the grid search and fit a new random forest classifier on the parameters found from the random search
+        rf_base = ens.RandomForestClassifier()
+        rf = RandomizedSearchCV(estimator = rf_base,
+                                param_distributions = grid,
+                                n_iter = gridsearch, 
+                                cv = k_fold,
+                                verbose=3,
+                                random_state=42, 
+                                n_jobs = 1)
+
+        '''
+        rf = GridSearchCV(estimator = rf_base,
+                          param_grid = grid,
+                          scoring = 'balanced_accuracy',
+                          n_jobs = -1,
+                          refit = True,
+                          cv = 10, # for k-fold cross-validation
+                          verbose = 3,
+                          pre_dispatch = 16,
+                          return_train_score = True)
+        '''
+        rf.fit(training, training_classes)
+        # View the parameter values the random search found
+        log.info("Best parameters from the grid search: {}".format(rf_gridsearch.best_params_))
+        #TODO: At this point, we could do a targeted grid search on a smaller subset of the parameter space based on what we know now, but that cannot easily be automated
+    else:
+        log.info("Fitting a single random forest model to the training dataset without gridsearch.")
+        # for more information: http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
+        rf = ens.RandomForestClassifier()
+        rf.fit(training, training_classes)
+
+    # Accuracy assessment / validation
+    preds = rf.predict(testing)
+    log.info("Accuracy assessment at model training stage")    
+    log.info("Training   classification accuracy (75% of data): {}".format(rf.score(training, training_classes)))
+    log.info("Validation classification accuracy (25% of data): {}".format(rf.score(testing, testing_classes)))
+    # Confusion matrix: Rows represent predicted classes, columns are the true classes
+    confusion = metrics.confusion_matrix(testing_classes, preds, labels = labels)
+    log.info("Confusion matrix:")
+    log.info("            Reference class ->")
+    log.info("                |")
+    log.info("Predicted class v")
+    log.info("{}".format(confusion))
+
     # build the Random Forest Classifier 
     # for more information: http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
-
-    rf = ens.RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4, 
-                                min_samples_split = 2, min_samples_leaf = 1, max_features = 'auto', 
-                                bootstrap = True, oob_score = True, n_jobs = 1, random_state = None, verbose = True)  
-
+    #OLD: rf = ens.RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4, 
+    #                            min_samples_split = 2, min_samples_leaf = 1, max_features = 'auto', 
+    #                            bootstrap = True, oob_score = True, n_jobs = -1, random_state = None, verbose = True)  
     # fit the model to the training data and the feature dataset
-    rf = rf.fit(learning_data, classes)
+    #rf = rf.fit(learning_data, classes)
 
     # export the Random Forest model to a file
     joblib.dump(rf, modelfile)
@@ -1272,12 +1352,11 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
     importances = rf.feature_importances_
     std = np.std([tree.feature_importances_ for tree in rf.estimators_], axis=0)
     indices = np.argsort(importances)[::-1]
-
     # Print the feature ranking
     log.info("Feature ranking:")
     for f in range(learning_data.shape[1]):
         log.info("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
-   
+  
     return(rf) # returns the random forest model object
 
 
