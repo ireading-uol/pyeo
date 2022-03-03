@@ -33,6 +33,7 @@ from osgeo import gdalconst
 from osgeo import gdal
 from osgeo import osr
 from osgeo import ogr
+import pandas as pd
 import joblib
 import numpy as np
 import random
@@ -42,6 +43,7 @@ from sklearn import ensemble as ens
 from sklearn.externals import joblib as sklearn_joblib
 from sklearn.model_selection import cross_val_score, train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn import metrics
+import sys
 
 from pyeo.coordinate_manipulation import get_local_top_left
 from pyeo.filesystem_utilities import get_mask_path
@@ -156,14 +158,20 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     if skip_existing:
         log.info("Checking for existing classification {}".format(class_out_path))
         if os.path.isfile(class_out_path):
-            log.info("Class image exists, skipping.")
-            return class_out_path
-    log.info("Classifying file: {}".format(image_path))
-    log.info("Saved model     : {}".format(model_path))
+            try:
+                f = gdal.Open(class_out_path)
+                f = None
+                log.info("Class image exists and is readable - skipping.")
+                return class_out_path
+            except:
+                log.info("Class image exists but is not readable - deleting and redoing: {}".format(class_out_path))
+                os.remove(class_out_path)
     if not os.path.exists(image_path):
         log.error("File not found: {}".format(image_path))
     if not os.path.exists(model_path):
         log.error("File not found: {}".format(model_path))
+    log.info("Classifying file: {}".format(image_path))
+    log.info("Saved model     : {}".format(model_path))
     try:
         image = gdal.Open(image_path)
     except RuntimeError as e:
@@ -181,100 +189,100 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
     except TypeError as e:
         log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
         model = joblib.load(model_path)
-    class_out_image = create_matching_dataset(image, class_out_path, format=str(out_format), datatype=gdal.GDT_Byte)
-    log.info("Created classification image file: {}".format(class_out_path))
-    if prob_out_path:
-        try:
-            log.info("n classes in the model: {}".format(model.n_classes_))
-        except AttributeError as e:
-            log.warning("Model has no n_classes_ attribute (known issue with GridSearch): {}".format(e))
-        prob_out_image = create_matching_dataset(image, prob_out_path, bands=model.n_classes_, datatype=gdal.GDT_Float32)
-        log.info("Created probability image file: {}".format(prob_out_path))
-    model.n_cores = -1
-    image_array = image.GetVirtualMemArray()
-
-    if apply_mask:
-        mask_path = get_mask_path(image_path)
-        log.info("Applying mask at {}".format(mask_path))
-        mask = gdal.Open(mask_path)
-        mask_array = mask.GetVirtualMemArray()
-        image_array = apply_array_image_mask(image_array, mask_array)
-        mask_array = None
-        mask = None
-
-    # Mask out missing values from the classification
-    # at this point, image_array has dimensions [band, y, x]
-    image_array = reshape_raster_for_ml(image_array)
-    # Now it has dimensions [x * y, band] as needed for Scikit-Learn
-
-    # Determine where in the image array there are no missing values in any of the bands (axis 1)
-    #log.info("Finding good pixels without missing values")
-    #log.info("image_array.shape = {}".format(image_array.shape))
-    n_samples = image_array.shape[0]  # gives x * y dimension of the whole image
-    nbands = image_array.shape[1] # gives number of bands
-    boo = np.where(image_array[:,0] != nodata, True, False)
-    if nbands > 1:
-        for band in range(1, nbands, 1):
-            boo1 = np.where(image_array[:,band] != nodata, True, False)
-            boo = np.logical_and(boo, boo1)
-    good_indices = np.where(boo)[0] # get indices where all bands contain data
-    good_sample_count = np.count_nonzero(boo)
-    log.info("Proportion of non-missing values: {}%".format(good_sample_count/n_samples*100))
-    good_samples = np.take(image_array, good_indices, axis=0).squeeze()
-    n_good_samples = len(good_samples)
-    classes = np.full(n_good_samples, nodata, dtype=np.ubyte)
-    if prob_out_path:
-        probs = np.full((n_good_samples, model.n_classes_), nodata, dtype=np.float32)
-    chunk_size = int(n_good_samples / chunks)
-    chunk_resid = n_good_samples - (chunk_size * chunks)
-    log.info("   Number of chunks {} Chunk size {} Chunk residual {}".format(chunks, chunk_size, chunk_resid))
-    # The chunks iterate over all values in the array [x * y, bands] always with all bands per chunk
-    for chunk_id in range(chunks):
-        offset = chunk_id * chunk_size
-        if chunk_id == chunks - 1:
-            chunk_size = chunk_size + chunk_resid
-        log.info("   Classifying chunk {} of size {}".format(chunk_id+1, chunk_size))
-        chunk_view = good_samples[offset : offset + chunk_size]
-        indices_view = good_indices[offset : offset + chunk_size]
-        out_view = classes[offset : offset + chunk_size]
-        chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
-        indices_view = indices_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
-        out_view[:] = model.predict(chunk_view)
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        class_out_temp = os.path.join(td, os.path.basename(class_out_path))
+        class_out_image = create_matching_dataset(image, class_out_temp, format=str(out_format), datatype=gdal.GDT_Byte)
         if prob_out_path:
-            log.info("   Calculating probabilities")
-            prob_view = probs[offset : offset + chunk_size, :]
-            prob_view[:, :] = model.predict_proba(chunk_view)
+            try:
+                log.info("n classes in the model: {}".format(model.n_classes_))
+            except AttributeError as e:
+                log.warning("Model has no n_classes_ attribute (known issue with GridSearch): {}".format(e))
+            prob_out_temp = os.path.join(td, os.path.basename(prob_out_path))
+            prob_out_image = create_matching_dataset(image, prob_out_temp, bands=model.n_classes_, datatype=gdal.GDT_Float32)
+        model.n_cores = -1
+        image_array = image.GetVirtualMemArray()
+        if apply_mask:
+            mask_path = get_mask_path(image_path)
+            #log.info("Applying mask at {}".format(mask_path))
+            mask = gdal.Open(mask_path)
+            mask_array = mask.GetVirtualMemArray()
+            image_array = apply_array_image_mask(image_array, mask_array)
+            mask_array = None
+            mask = None
+        # Mask out missing values from the classification
+        # at this point, image_array has dimensions [band, y, x]
+        image_array = reshape_raster_for_ml(image_array)
+        # Now it has dimensions [x * y, band] as needed for Scikit-Learn
 
-    class_out_array = np.full((n_samples), nodata)
-    for i, class_val in zip(good_indices, classes):
-        class_out_array[i] = class_val
-    class_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :] = \
-        reshape_ml_out_to_raster(class_out_array, image.RasterXSize, image.RasterYSize)
-
-    if prob_out_path:
-        #log.info("   Creating probability array of size {}".format(n_samples * model.n_classes_))
-        prob_out_array = np.full((n_samples, model.n_classes_), nodata)
-        for i, prob_val in zip(good_indices, probs):
-            prob_out_array[i] = prob_val
-        #log.info("   Creating GDAL probability image")
-        #log.info("   N Classes = {}".format(prob_out_array.shape[1]))
-        #log.info("   Image X size = {}".format(image.RasterXSize))
-        #log.info("   Image Y size = {}".format(image.RasterYSize))
-        prob_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :, :] = \
-            reshape_prob_out_to_raster(prob_out_array, image.RasterXSize, image.RasterYSize)
-
-    class_out_image = None
-    class_out_array = None
-    prob_out_image = None
-    prob_out_array = None
+        # Determine where in the image array there are no missing values in any of the bands (axis 1)
+        #log.info("Finding good pixels without missing values")
+        #log.info("image_array.shape = {}".format(image_array.shape))
+        n_samples = image_array.shape[0]  # gives x * y dimension of the whole image
+        nbands = image_array.shape[1] # gives number of bands
+        boo = np.where(image_array[:,0] != nodata, True, False)
+        if nbands > 1:
+            for band in range(1, nbands, 1):
+                boo1 = np.where(image_array[:,band] != nodata, True, False)
+                boo = np.logical_and(boo, boo1)
+        good_indices = np.where(boo)[0] # get indices where all bands contain data
+        good_sample_count = np.count_nonzero(boo)
+        log.info("Proportion of non-missing values: {:3.2f}%".format(good_sample_count/n_samples*100))
+        good_samples = np.take(image_array, good_indices, axis=0).squeeze()
+        n_good_samples = len(good_samples)
+        classes = np.full(n_good_samples, nodata, dtype=np.ubyte)
+        if prob_out_path:
+            probs = np.full((n_good_samples, model.n_classes_), nodata, dtype=np.float32)
+        chunk_size = int(n_good_samples / chunks)
+        chunk_resid = n_good_samples - (chunk_size * chunks)
+        log.info("   Number of chunks {} Chunk size {} Chunk residual {}".format(chunks, chunk_size, chunk_resid))
+        # The chunks iterate over all values in the array [x * y, bands] always with all bands per chunk
+        for chunk_id in range(chunks):
+            offset = chunk_id * chunk_size
+            if chunk_id == chunks - 1:
+                chunk_size = chunk_size + chunk_resid
+            log.info("   Classifying chunk {} of size {}".format(chunk_id+1, chunk_size))
+            chunk_view = good_samples[offset : offset + chunk_size]
+            indices_view = good_indices[offset : offset + chunk_size]
+            out_view = classes[offset : offset + chunk_size]
+            chunk_view = chunk_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
+            indices_view = indices_view.copy() # bug fix for Pandas bug: https://stackoverflow.com/questions/53985535/pandas-valueerror-buffer-source-array-is-read-only
+            out_view[:] = model.predict(chunk_view)
+            if prob_out_path:
+                log.info("   Calculating probabilities")
+                prob_view = probs[offset : offset + chunk_size, :]
+                prob_view[:, :] = model.predict_proba(chunk_view)
+        class_out_array = np.full((n_samples), nodata)
+        for i, class_val in zip(good_indices, classes):
+            class_out_array[i] = class_val
+        class_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :] = \
+            reshape_ml_out_to_raster(class_out_array, image.RasterXSize, image.RasterYSize)
+        if prob_out_path:
+            #log.info("   Creating probability array of size {}".format(n_samples * model.n_classes_))
+            prob_out_array = np.full((n_samples, model.n_classes_), nodata)
+            for i, prob_val in zip(good_indices, probs):
+                prob_out_array[i] = prob_val
+            #log.info("   Creating GDAL probability image")
+            #log.info("   N Classes = {}".format(prob_out_array.shape[1]))
+            #log.info("   Image X size = {}".format(image.RasterXSize))
+            #log.info("   Image Y size = {}".format(image.RasterYSize))
+            prob_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :, :] = \
+                reshape_prob_out_to_raster(prob_out_array, image.RasterXSize, image.RasterYSize)
+        class_out_image = None
+        class_out_array = None
+        prob_out_image = None
+        prob_out_array = None
+        shutil.move(class_out_temp, class_out_path)
+        shutil.move(prob_out_temp, prob_out_path)
     # verify that the output file(s) have been created
     if not os.path.exists(class_out_path):
-        log.error("File not found: {}".format(class_out_path))
-        sys.exit(1)
+        log.error("Classification output file not found: {}".format(class_out_path))
+    else:
+        log.info("Created classification image file: {}".format(class_out_path))
     if prob_out_path:
         if not os.path.exists(prob_out_path):
-            log.error("File not found: {}".format(prob_out_path))
-            sys.exit(1)
+            log.error("Probability output file not found: {}".format(prob_out_path))
+        else:
+            log.info("Created probability image file: {}".format(prob_out_path))
         return class_out_path, prob_out_path
     else:
         return class_out_path
@@ -496,7 +504,6 @@ def autochunk(dataset, mem_limit=None):
         if chunk_size_bytes < mem_limit:
             return num_chunks
 
-
 def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
                        apply_mask=False, out_type="GTiff", chunks=4, skip_existing=False):
     """
@@ -529,8 +536,10 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
     log = logging.getLogger(__name__)
     log.info("Classifying files in {}".format(in_dir))
     log.info("Class files saved in {}".format(class_out_dir))
-    log.info("Prob. files saved in {}".format(prob_out_dir))
-    log.info("Skip existing files? {}".format(skip_existing))
+    if prob_out_dir is not None:
+        log.info("Prob. files saved in {}".format(prob_out_dir))
+    if skip_existing:
+        log.info("Skipping existing files.")
     for image_path in glob.glob(in_dir+r"/*.tif"):
         image_name = os.path.basename(image_path)[:-4]
         class_out_path = os.path.join(class_out_dir, image_name+"_class.tif")
@@ -779,7 +788,7 @@ def create_model_for_region(path_to_region, model_out, scores_out, attribute="CO
         score_file = None
 
 
-def create_rf_model_for_region(path_to_region, model_out, attribute="CODE", gridsearch=1, k_fold=5):
+def create_rf_model_for_region(path_to_region, model_out, attribute="CODE", band_names = [], gridsearch=1, k_fold=5):
     """
     Takes all .tif files in a given folder and creates a pickled scikit-learn random forest model.
 
@@ -793,6 +802,8 @@ def create_rf_model_for_region(path_to_region, model_out, attribute="CODE", grid
         Path to save the cross-validation scores
     attribute : str
         The label of the field in the training shapefiles that contains the classification labels. Defaults to "CODE".
+    band_names : list of str
+        List of band names using in labelling the signatures in the signature file. Can be left as an empty list [].
     gridsearch : int, optional
         Number of randomized random forests for gridsearch. Defaults to 1.
     k_fold : int, optional
@@ -802,7 +813,7 @@ def create_rf_model_for_region(path_to_region, model_out, attribute="CODE", grid
     log.info("Create a random forest classification model for region based on tif/shp file pairs: {}".format(path_to_region))
     image_glob = os.path.join(path_to_region, r"*.tif")
     image_list = glob.glob(image_glob)
-    model = train_rf_model(image_list, model_out, ntrees = 101, attribute=attribute, weights = None, gridsearch=gridsearch)
+    model = train_rf_model(image_list, model_out, ntrees = 101, attribute=attribute, band_names = band_names, weights = None, gridsearch=gridsearch)
     return
 
 
@@ -941,7 +952,7 @@ def get_training_data(image_path, shape_path, attribute="CODE"):
         log.error("   Image has EPSG: {}".format(epsg2))
         image = None
         return [], []
-    with TemporaryDirectory() as td:
+    with TemporaryDirectory(dir=os.getcwd()) as td:
         shape_raster_path = os.path.join(td, os.path.basename(shape_path)[:-4]+"_rasterised")
         log.info("Shape raster path {}".format(shape_raster_path))
         shape_raster_path = shapefile_to_raster(shape_path, image_path, shape_raster_path, verbose=False, attribute=attribute, nodata=0)
@@ -1059,7 +1070,7 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
     #log.info("  shapefile name {}".format(shapefilename))
     #log.info("  inrasterfile name {}".format(inraster_filename))
     #log.info("  outrasterfile name {}".format(outraster_filename))
-    with TemporaryDirectory() as td:
+    with TemporaryDirectory(dir=os.getcwd()) as td:
         image = gdal.Open(inraster_filename)
         image_gt = image.GetGeoTransform()
         drv = ogr.GetDriverByName("ESRI Shapefile")
@@ -1096,7 +1107,8 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
 
 
 
-def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", weights = None, balanced = True, gridsearch = 1, k_fold=5):
+def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", band_names = [],
+                   weights = None, balanced = True, gridsearch = 1, k_fold=5):
     '''
     Adapted from pygge.py
 
@@ -1110,6 +1122,8 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
       modelfile = filename and path to a pickle file to save the trained model to
       ntrees = number of trees in the random forest, default = 101
       attribute = string naming the attribute column to be rasterised in the shapefile
+      band_names = list of strings indicating the names of the bands (used for text output and labelling 
+        the learning data output file). If [], a sequence of numbers is assigned.
       weights (optional) = a list of integers giving weights for all classes. 
         If not specified, all weights will be equal.
       balanced (optional) = if True, use a balanced number of training pixels per class
@@ -1189,7 +1203,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 ds = None
                 shapefile_path = new_shapefile_path
             log.info("Analysing shapefile: {}".format(shapefile_path))
-            with TemporaryDirectory() as td:
+            with TemporaryDirectory(dir=os.getcwd()) as td:
                 # rasterise the shapefile
                 shape_raster_path = os.path.join(td, os.path.basename(shapefile_path)[:-4]+"_rasterised.tif")
                 #log.info("Shape raster path {}".format(shape_raster_path))
@@ -1201,7 +1215,10 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
                 nclasses = len(these_labels)
                 labels = labels + these_labels
                 log.info('This training data shapefile includes {} classes: {}'.format(nclasses, these_labels))
-                log.info("{} bands in image file".format(image.RasterCount))
+                nbands = image.RasterCount
+                log.info("{} bands in image file".format(nbands))
+                if len(band_names) == nbands:
+                    log.info("  {}".format(band_names))
                 # compose the X,Y pixel positions (feature dataset and training dataset)
                 # 0 = missing class value
                 #log.info(image_array.shape)
@@ -1238,10 +1255,10 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
 
     if balanced:
         indices = []
-        log.info("Drawing a more balanced random sample of {} training pixels for each class.".format(smallest))
+        log.info("Drawing a more balanced random sample of {} max. training pixels for each class.".format(10*smallest))
         for c in labels:
             # draw a random sample of the list indices where that class is found
-            if len([pos for pos, value in enumerate(classes) if value == c]) > smallest:
+            if len([pos for pos, value in enumerate(classes) if value == c]) > 10*smallest:
                 indices = indices + random.sample([pos for pos, value in enumerate(classes) if value == c], 10*smallest)
             else:
                 indices = indices + [pos for pos, value in enumerate(classes) if value == c]
@@ -1252,6 +1269,30 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
         for c in labels:
             found = len(classes[classes == c])
             log.info("  Class {} has {} training pixels".format(c, found))
+    
+    #TODO: Test this bit: save training data to file and produce basic signature statistics by class
+    if len(band_names) != nbands:
+        band_names = [str(i+1) for i in range(nbands)]
+    learning_df = pd.DataFrame(learning_data, columns = band_names)
+    learning_df['label'] = classes
+    learningfile = modelfile[:-4]+"_learning.pkl"
+    log.info("Saving learning data file: {}".format(learningfile))
+    joblib.dump(learning_df, learningfile)
+    sigfile = modelfile[:-4]+"_signatures.txt"
+    log.info("Saving tab-delimited signature file: {}".format(sigfile))
+    col_names = learning_df.columns.values.tolist()
+    with open(sigfile, 'w') as f:
+        f.write("class\tband\tmin\tmax\tmean\tstdev\n")
+        for c in range(nclasses):
+            for b in band_names:
+                f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(c+1, 
+                                                          b, 
+                                                          learning_data.groupby('label').min()[b][str(c+1)],
+                                                          learning_data.groupby('label').max()[b][str(c+1)],
+                                                          learning_data.groupby('label').mean()[b][str(c+1)],
+                                                          learning_data.groupby('label').std()[b][str(c+1)]
+                                                          ))
+        f = None
 
     # create a dictionary of class weights (class 1 has the weight 1, etc.)
     w = dict() # create an empty dictionary
@@ -1316,7 +1357,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
         '''
         rf.fit(training, training_classes)
         # View the parameter values the random search found
-        log.info("Best parameters from the grid search: {}".format(rf_gridsearch.best_params_))
+        log.info("Best parameters from the grid search: {}".format(rf.best_params_))
         #TODO: At this point, we could do a targeted grid search on a smaller subset of the parameter space based on what we know now, but that cannot easily be automated
     else:
         log.info("Fitting a single random forest model to the training dataset without gridsearch.")
@@ -1335,7 +1376,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
     log.info("            Reference class ->")
     log.info("                |")
     log.info("Predicted class v")
-    log.info("{}".format(confusion))
+    log.info("\n{}".format(confusion))
 
     # build the Random Forest Classifier 
     # for more information: http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
@@ -1347,16 +1388,23 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", we
 
     # export the Random Forest model to a file
     joblib.dump(rf, modelfile)
-    
+
     # calculate the feature importances
-    importances = rf.feature_importances_
-    std = np.std([tree.feature_importances_ for tree in rf.estimators_], axis=0)
+    if gridsearch == 1:   
+        importances = rf.feature_importances_
+    else:
+        log.info("Best random forest estimator from gridsearch: {}".format(rf.best_estimator_))
+        log.info("Best random forest parameters from gridsearch: {}".format(rf.best_params_))
+        log.info("Best random forest accuracy score from gridsearch: {}".format(rf.best_score_))
+        #TODO: Test this - Add feature importances here. rf.feature_importances_ does not work after randomized grid search
+        importances = rf.best_estimator_.feature_importances_
+    #TODO: Does not work on RandomizedSearchCV objects, only for gridsearch objects
+    #std = np.std([tree.feature_importances_ for tree in rf.estimators_], axis=0)
     indices = np.argsort(importances)[::-1]
     # Print the feature ranking
     log.info("Feature ranking:")
     for f in range(learning_data.shape[1]):
         log.info("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
-  
     return(rf) # returns the random forest model object
 
 

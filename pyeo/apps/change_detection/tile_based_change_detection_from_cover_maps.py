@@ -51,14 +51,16 @@ def rolling_detection(config_path,
                       download_source="scihub",
                       build_prob_image=False,
                       do_classify=False,
+                      do_change=False,
                       do_update=False,
                       do_quicklooks=False,
-                      do_delete=False
+                      do_delete=False,
+                      skip_existing=False
                       ):
 
     # If any processing step args are present, do not assume that we want to do all steps
     do_all = True
-    if (build_composite or do_download or do_classify or do_update or do_delete or do_quicklooks) == True:
+    if (build_composite or do_download or do_classify or do_change or do_update or do_delete or do_quicklooks) == True:
         do_all = False
     conf = configparser.ConfigParser(allow_no_value=True)
     conf.read(config_path)
@@ -94,6 +96,8 @@ def rolling_detection(config_path,
         log.info("  --do_classify to apply the random forest model and create classification layers")
     if build_prob_image:
         log.info("  --build_prob_image to save classification probability layers")
+    if do_change:
+        log.info("  --change to produce change detection layers and report images")
     if do_update:
         log.info("  --do_update to update the baseline composite with new observations")
     if do_quicklooks:
@@ -109,6 +113,7 @@ def rolling_detection(config_path,
         l2_masked_image_dir = os.path.join(tile_root_dir, r"images/cloud_masked")
         categorised_image_dir = os.path.join(tile_root_dir, r"output/classified")
         probability_image_dir = os.path.join(tile_root_dir, r"output/probabilities")
+        sieved_image_dir = os.path.join(tile_root_dir, r"output/sieved")
         composite_dir = os.path.join(tile_root_dir, r"composite")
         composite_l1_image_dir = os.path.join(tile_root_dir, r"composite/L1C")
         composite_l2_image_dir = os.path.join(tile_root_dir, r"composite/L2A")
@@ -375,7 +380,7 @@ def rolling_detection(config_path,
                 log.info("    {} L2A products".format(l2a_products.shape[0]))
             df = None
 
-            #TODO: Before the next step, seacrh the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes
+            #TODO: Before the next step, search the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes
             # Remove those already obtained from the list
 
             if l1c_products.shape[0] > 0:
@@ -504,19 +509,33 @@ def rolling_detection(config_path,
         # ------------------------------------------------------------------------
         # Step 4: Pair up the class images with the composite baseline map 
         # and identify all pixels with the change between groups of classes of interest.
-        # Currently this is being done together with the classification step.
+        # Optionally applies a sieve filter to the class images.
         # ------------------------------------------------------------------------
-        if do_all or do_classify:
+        if do_all or do_change:
             log.info("---------------------------------------------------------------")
             log.info("Creating change layers from stacked class images.")
             log.info("---------------------------------------------------------------")
             log.info("Change of interest is from any of the classes {} to any of the classes {}.".format(from_classes, to_classes))
 
+            # optionally sieve the class images
+            if sieve > 0:
+                log.info("Applying sieve to classification outputs.")
+                sieved_paths = pyeo.raster_manipulation.sieve_directory(in_dir = categorised_image_dir,
+                                                                        out_dir = sieved_image_dir,
+                                                                        neighbours = 8,
+                                                                        sieve = sieve,
+                                                                        out_type="GTiff", 
+                                                                        skip_existing=skip_existing)
+
+                class_image_dir = sieved_image_dir
+            else:
+                class_image_dir = categorised_image_dir
+
             # get all image paths in the classification maps directory except the class composites
-            class_image_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() and f.name.endswith(".tif") \
+            class_image_paths = [ f.path for f in os.scandir(class_image_dir) if f.is_file() and f.name.endswith(".tif") \
                                   and not "composite_" in f.name ]
             if len(class_image_paths) == 0:
-                raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
+                raise FileNotFoundError("No class images found in {}.".format(class_image_dir))
 
             # sort class images by image acquisition date
             class_image_paths = list(filter(pyeo.filesystem_utilities.get_image_acquisition_time, class_image_paths))
@@ -539,7 +558,14 @@ def rolling_detection(config_path,
                              "check that the earliest dated image in your images/merged folder is later than the earliest"
                              " dated image in your composite/ folder.")
                 sys.exit(1)
-            latest_class_composite_path = os.path.join(categorised_image_dir, os.path.basename(latest_composite_path)[:-4]+"_class.tif")
+            
+            latest_class_composite_path = os.path.join(
+                                                       class_image_dir, \
+                                                       [ f.path for f in os.scandir(class_image_dir) if f.is_file() \
+                                                         and os.path.basename(latest_composite_path)[:-4] in f.name \
+                                                         and f.name.endswith(".tif")][0]
+                                          )
+
             log.info("Most recent class composite at {}".format(latest_class_composite_path))
             if not os.path.exists(latest_class_composite_path):
                 log.critical("Latest class composite not found. The first time you run this script, you need to include the "
@@ -547,7 +573,6 @@ def rolling_detection(config_path,
                              "check that the earliest dated image in your images/merged folder is later than the earliest"
                              " dated image in your composite/ folder. Then, you need to run the --classify option.")
                 sys.exit(1)
-            log.info("Latest class composite: {}".format(latest_class_composite_path))
 
             # find change patterns in the stack of classification images
             for index, image in enumerate(class_image_paths):
@@ -587,7 +612,11 @@ def rolling_detection(config_path,
                                           tile_id,
                                           after_timestamp.strftime("%Y%m%dT%H%M%S"))
                                           )
+            log.info("Combining date maps: {}".format(date_image_paths))
             pyeo.raster_manipulation.combine_date_maps(date_image_paths, output_product)
+            log.info("Compressing the report image: {}".format(output_product))
+            pyeo.raster_manipulation.compress_tiff(output_product, output_product)
+
             log.info("Created combined raster file with two layers: {}".format(output_product))
 
             log.info("Change date layers done and output product aggregated.")
@@ -785,6 +814,8 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--classify', dest='do_classify', action='store_true', default=False,
                         help="For each image in images/stacked, applies the classifier given in the .ini file. Saves"
                         "the outputs in output/categories.")
+    parser.add_argument('-x', '--change', dest='do_change', action='store_true', default=False,
+                        help="Produces change images by post-classification cross-tabulation.")
     parser.add_argument('-p', '--build_prob_image', dest='build_prob_image', action='store_true', default=False,
                         help="If present, build a confidence map of pixels. These tend to be large.")
     parser.add_argument('-u', '--update', dest='do_update', action='store_true', default=False,
@@ -794,6 +825,8 @@ if __name__ == "__main__":
                         help="Creates quicklooks for all composites, L2A change images, classified images and probability images.")
     parser.add_argument('-r', '--remove', dest='do_delete', action='store_true', default=False,
                         help="Not implemented. If present, removes all images in images/ to save space.")
+    parser.add_argument('-s', '--skip', dest='skip_existing', action='store_true', default=False,
+                        help="If chosen, existing output files will be skipped in the production process.")
 
     args = parser.parse_args()
 
@@ -803,10 +836,11 @@ if __name__ == "__main__":
     buffer_size = 20            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
     buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
     max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
-    from_classes = [1]          #find subsequent changes from any of these classes
-    to_classes = [2,3,4,5,7,11] #                          to any of these classes
-    skip_existing = True        # skip existing image products from processing
+    from_classes = [1,3,11,12]          #find subsequent changes from any of these classes
+    to_classes = [4,5] #                          to any of these classes
     faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded
+    sieve = 20                  # if 0, no sieve is applied. If >0, the classification images will be sieved using gdal and all 
+                                # contiguous groups of pixels smaller than this number will be eliminated
 
     '''
     e.g. classes in new matogrosso model	

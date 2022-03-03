@@ -13,6 +13,8 @@ if __name__ == "__main__":
                         help="Attribute field holding the class to train on")
     parser.add_argument("out_path", type=str, action="store",
                         help="Path for the output .pkl file")
+    parser.add_argument("--band_names", dest="band_names", type=list, action="store", default=[],
+                        help="If a list of strings is given, it will be used in the signature file to label the raster bands.")
     parser.add_argument("--gridsearch", dest="gridsearch", type=int, action="store", default=1,
                         help="If a number is given, a randomized grid search with that number of random forests will be performed.")
     parser.add_argument("--kfold", dest="kfold", type=int, action="store", default=5,
@@ -28,6 +30,6 @@ if __name__ == "__main__":
     log.info("Output path for the model: {}".format(args.out_path))
     log.info("Attribute field in the shapefile with training labels: {}".format(args.class_attribute_field))
 
-    pyeo.classification.create_rf_model_for_region(args.region_path, args.out_path, args.class_attribute_field, args.gridsearch, args.kfold)
+    pyeo.classification.create_rf_model_for_region(args.region_path, args.out_path, args.class_attribute_field, args.band_names, args.gridsearch, args.kfold)
     
     log.info("***MODEL CREATION END***")

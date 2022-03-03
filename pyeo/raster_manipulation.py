@@ -2956,7 +2956,11 @@ def create_mask_from_class_map(class_map_path, out_path, classes_of_interest, bu
         The path to the new mask.
 
     """
-    class_image = gdal.Open(class_map_path)
+    try:
+        class_image = gdal.Open(class_map_path)
+    except:
+        log.warning("Could not open file. Skipping classification mask creation: ".format(class_map_path))
+        return ""
     class_array = class_image.GetVirtualMemArray()
     mask_array = np.isin(class_array, classes_of_interest)
     out_mask = create_matching_dataset(class_image, out_path, datatype=gdal.GDT_Byte)
@@ -3129,6 +3133,11 @@ def change_from_class_maps(old_class_path, new_class_path, change_raster, change
         to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path, 
                                                           out_path = os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
                                                           classes_of_interest = change_to)
+        if from_class_mask_path == "" or to_class_mask_path == "":
+            log.warning("Cannot create change raster from:")
+            log.warning("        {}".format(old_class_path))
+            log.warning("   and  {}".format(new_class_path))
+            return ""
         # combine masks by finding pixels that are 1 in the old mask and 1 in the new mask
         added_mask_path = add_masks([from_class_mask_path, to_class_mask_path], os.path.join(td, "combined.msk"), geometry_func="intersect")
         log.info("added mask path {}".format(added_mask_path))
@@ -3757,6 +3766,18 @@ def combine_date_maps(date_image_paths, output_product):
             notfound = notfound + [path]
     for path in notfound:
         date_image_paths.remove(path)
+    # check which files can be opened
+    corrupted = []
+    for path in date_image_paths:
+        try:
+            open_file = gdal.Open(path)
+            open_file = None
+        except:
+            log.warning("Cannot open file: {}".format(path))
+            corrupted = corrupted + [path]
+    for path in corrupted:
+        date_image_paths.remove(path)
+
     if len(date_image_paths) == 0:
         log.warning("No valid input files remain for report image creation.")
         return
@@ -3777,7 +3798,6 @@ def combine_date_maps(date_image_paths, output_product):
         log.warning("No valid input files remain for report image creation.")
         date_images = None
         return
-
 
     out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
     # Squeeze() to account for unaccountable extra dimension Windows patch adds
@@ -3804,4 +3824,109 @@ def combine_date_maps(date_image_paths, output_product):
     date_images = None
     return output_product
 
+
+def sieve_image(image_path, out_path, neighbours = 8, sieve = 10, skip_existing = False):
+    """
+    Sieves a class image using gdal. Output is saved out_path.
+
+    Parameters
+    ----------
+    image_path : str
+        The path to the class image file with a single band.
+    out_path : str
+        The path to the output file that will store the sieved class image.
+    neighbours : int
+        Number of neighbouring pixels at sieve stage. Can be 4 or 8.
+    sieve : int
+        Number of pixels in a class polygon. Only polygons below this threshold will be removed. See GDAL Sieve documentation.
+    skip_existing : boolean, optional
+        If True, skips the classification if the output file already exists.
+    """
+
+    if neighbours != 4 and neighbours != 8:
+        log.warning("Invalid neighbour connectedness for sieve. Changing value to 4.")
+        neighbours = 4
+    if os.path.exists(out_path) and skip_existing:
+        log.info("File exists. Skipping sieve stage. {}".format(out_path))
+        return
+    try:
+        image = gdal.Open(image_path)
+        out_image = create_matching_dataset(image, out_path, format='GTiff')
+        in_band = image.GetRasterBand(1)
+        out_band = out_image.GetRasterBand(1)
+        gdal.SieveFilter(srcBand=in_band, maskBand=None, dstBand=out_band, threshold=sieve, connectedness=neighbours, callback=gdal.TermProgress_nocb)
+        in_band = None
+        out_band = None
+        image = None
+    except:
+        log.warning("Could not open file for sieve filtering. Skipping. {}".format(image_path))   
+    return
+
+
+def sieve_directory(in_dir, out_dir = None, neighbours = 8, sieve = 10, out_type="GTiff", skip_existing=False):
+    """
+    Sieves all class images ending in .tif in in_dir using gdal.
+    Outputs are saved out_dir.
+
+    Parameters
+    ----------
+    in_dir : str
+        The path to the directory containing the class image files.
+    out_dir : str
+        The directory that will store the sieved class image files
+    neighbours : int
+        Number of neighbouring pixels at sieve stage. Can be 4 or 8.
+    sieve : int
+        Number of pixels in a class polygon. Only polygons below this threshold will be removed. See GDAL Sieve documentation.
+    out_type : str, optional
+        The raster format of the class image. Defaults to "GTiff" (geotif). See gdal docs for valid datatypes.
+    skip_existing : boolean, optional
+        If True, skips the classification if the output file already exists.
+
+    Returns:
+    --------
+    out_image_paths : list of str
+        A list with all paths to the sieved class image files, including those that already existed.
+    """
+
+    log = logging.getLogger(__name__)
+    log.info("Sieving class files in      {}".format(in_dir))
+    log.info("Sieved class files saved in {}".format(out_dir))
+    log.info("Neighbours = {}   Sieve = {}".format(neighbours, sieve))
+    log.info("Skip existing files? {}".format(skip_existing))
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
+    out_image_paths = []
+    for image_path in glob.glob(in_dir+r"/*.tif"):
+        image_name = os.path.basename(image_path)[:-4]+"_sieved.tif"
+        out_path = os.path.join(out_dir, image_name)
+        out_image_paths = out_image_paths + [out_path]
+        sieve_image(image_path = image_path, 
+                    out_path = out_path, 
+                    neighbours = neighbours,
+                    sieve = sieve,
+                    skip_existing=skip_existing)
+    return out_image_paths
+
+def compress_tiff(in_path, out_path):
+    """
+    Compresses a Geotiff file using gdal.
+
+    Parameters
+    ----------
+    in_path : str
+        The path to the input GeoTiff file.
+    out_path : str
+        The path to the output GeoTiff file.
+    """
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        try:
+            tmp_path = os.path.join(td, 'tmp_compressed.tif')
+            translateoptions = gdal.TranslateOptions(gdal.ParseCommandLine("-of GTiff -co COMPRESS=DEFLATE -co LZW -co OVERVIEWS=NONE"))
+            gdal.Translate(tmp_path, in_path, options=translateoptions)
+            shutil.move(tmp_path, out_path)
+        except RuntimeError as e:
+            log.error("Error opening GeoTiff file: {}".format(in_path))
+            log.error("  {}".format(e))
+    return
 
