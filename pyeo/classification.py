@@ -1281,16 +1281,17 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     sigfile = modelfile[:-4]+"_signatures.txt"
     log.info("Saving tab-delimited signature file: {}".format(sigfile))
     col_names = learning_df.columns.values.tolist()
+    learning_df = pd.DataFrame(learning_data, columns = col_names)
     with open(sigfile, 'w') as f:
         f.write("class\tband\tmin\tmax\tmean\tstdev\n")
         for c in range(nclasses):
             for b in band_names:
                 f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(c+1, 
                                                           b, 
-                                                          learning_data.groupby('label').min()[b][str(c+1)],
-                                                          learning_data.groupby('label').max()[b][str(c+1)],
-                                                          learning_data.groupby('label').mean()[b][str(c+1)],
-                                                          learning_data.groupby('label').std()[b][str(c+1)]
+                                                          learning_df.groupby('label').min()[b][str(c+1)],
+                                                          learning_df.groupby('label').max()[b][str(c+1)],
+                                                          learning_df.groupby('label').mean()[b][str(c+1)],
+                                                          learning_df.groupby('label').std()[b][str(c+1)]
                                                           ))
         f = None
 
