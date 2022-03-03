@@ -1156,6 +1156,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 for f in shape_paths:
                     log.info("  {}".format(f))
             shapefile_path = shape_paths[0]
+            log.info("Analysing shapefile: {}".format(shapefile_path))
             image = gdal.Open(raster_path)
             image_array = image.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly)
             # check that the two map projections have the same EPSG codes
@@ -1164,16 +1165,10 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
             img_crs = osr.SpatialReference(wkt = img_prj)
             shp_extent, shp_crs, epsg2 = get_shp_extent(shapefile_path)
             log.info("EPSG codes of the image and shapefile: {}, {}".format(epsg1, epsg2))
-            #log.info("  CRS of the image file: {}".format(img_crs))
-            #log.info("  CRS of the shapefile: {}".format(shp_crs))
-            if img_crs != shp_crs:
-                #log.warning("CRS of the image and shapefile are different. This can lead to misalignment of pixels and an inaccurate model.") 
-                pass
             if not epsg1 == epsg2:
                 log.warning("Reprojecting shapefile. The EPSG codes of the image and shapefile are different.")
                 log.warning("   Image has EPSG    : {}".format(epsg1))
                 log.warning("   Shapefile has EPSG: {}".format(epsg2))
-                #TODO test this - reproject shapefile to raster EPSG
                 driver = ogr.GetDriverByName("ESRI Shapefile")
                 dataSource = driver.Open(shapefile_path, 1)
                 layer = dataSource.GetLayer()
@@ -1182,6 +1177,10 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 transform = osr.CoordinateTransformation(sourceprj, targetprj)
                 to_fill = ogr.GetDriverByName("Esri Shapefile")
                 new_shapefile_path = shapefile_path[:-4]+"_"+str(epsg1)+".shp"
+                # Remove reprojected output shapefile if it already exists
+                if os.path.exists(new_shapefile_path):
+                    log.warning("Reprojected shapefile already exists. Deleting previous version: {}".format(new_shapefile_path))
+                    to_fill.DeleteDataSource(new_shapefile_path)
                 ds = to_fill.CreateDataSource(new_shapefile_path)
                 outlayer = ds.CreateLayer('', targetprj, ogr.wkbPolygon)
                 outlayer.CreateField(ogr.FieldDefn('id', ogr.OFTInteger))
@@ -1202,7 +1201,6 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 dataSource = None
                 ds = None
                 shapefile_path = new_shapefile_path
-            log.info("Analysing shapefile: {}".format(shapefile_path))
             with TemporaryDirectory(dir=os.getcwd()) as td:
                 # rasterise the shapefile
                 shape_raster_path = os.path.join(td, os.path.basename(shapefile_path)[:-4]+"_rasterised.tif")
