@@ -267,12 +267,12 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
             #log.info("   Image Y size = {}".format(image.RasterYSize))
             prob_out_image.GetVirtualMemArray(eAccess=gdal.GF_Write)[:, :, :] = \
                 reshape_prob_out_to_raster(prob_out_array, image.RasterXSize, image.RasterYSize)
+            prob_out_image = None
+            prob_out_array = None
+            shutil.move(prob_out_temp, prob_out_path)
         class_out_image = None
         class_out_array = None
-        prob_out_image = None
-        prob_out_array = None
         shutil.move(class_out_temp, class_out_path)
-        shutil.move(prob_out_temp, prob_out_path)
     # verify that the output file(s) have been created
     if not os.path.exists(class_out_path):
         log.error("Classification output file not found: {}".format(class_out_path))
@@ -1279,7 +1279,6 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     sigfile = modelfile[:-4]+"_signatures.txt"
     log.info("Saving tab-delimited signature file: {}".format(sigfile))
     col_names = learning_df.columns.values.tolist()
-    learning_df = pd.DataFrame(learning_data, columns = col_names)
     with open(sigfile, 'w') as f:
         f.write("class\tband\tmin\tmax\tmean\tstdev\n")
         for c in range(nclasses):
