@@ -1280,16 +1280,28 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     log.info("Saving tab-delimited signature file: {}".format(sigfile))
     col_names = learning_df.columns.values.tolist()
     with open(sigfile, 'w') as f:
+        log.info("Signatures:")
+        log.info("class, band, min, max, mean, stdev")
         f.write("class\tband\tmin\tmax\tmean\tstdev\n")
-        for c in range(nclasses):
-            for b in band_names:
-                f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(c+1, 
-                                                          b, 
-                                                          learning_df.groupby('label').min()[b][str(c+1)],
-                                                          learning_df.groupby('label').max()[b][str(c+1)],
-                                                          learning_df.groupby('label').mean()[b][str(c+1)],
-                                                          learning_df.groupby('label').std()[b][str(c+1)]
-                                                          ))
+        for c in range(np.max(classes)):
+            if c+1 in classes:
+                for b in band_names:
+                    log.info("{}, {}, {}, {}, {}, {}".format(c+1, 
+                                                              b, 
+                                                              learning_df.groupby('label').min()[b][c+1],
+                                                              learning_df.groupby('label').max()[b][c+1],
+                                                              learning_df.groupby('label').mean()[b][c+1],
+                                                              learning_df.groupby('label').std()[b][c+1]
+                                                              ))
+                    f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(c+1, 
+                                                              b, 
+                                                              learning_df.groupby('label').min()[b][c+1],
+                                                              learning_df.groupby('label').max()[b][c+1],
+                                                              learning_df.groupby('label').mean()[b][c+1],
+                                                              learning_df.groupby('label').std()[b][c+1]
+                                                              ))
+            else:
+                log.warning("Class {} does not exist in the learning data.".format(c+1))
         f = None
 
     # create a dictionary of class weights (class 1 has the weight 1, etc.)
