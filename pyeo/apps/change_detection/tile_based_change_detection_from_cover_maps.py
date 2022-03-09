@@ -830,18 +830,35 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # TODO: bands and resolution can be made flexible BUT the bands need to be at the same resolution
+    #TODO: bands and resolution can be made flexible BUT the bands need to be at the same resolution
+
+    #TODO: move this option into the .ini file
     bands = ['B02', 'B03', 'B04', 'B08']
+
+    #TODO: move this option into the .ini file
     resolution = '10m'
+
+    #TODO: move this option into the .ini file
     buffer_size = 20            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
+
+    #TODO: move this option into the .ini file
     buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
+
+    #TODO: move this option into the .ini file
     max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
+
+    #TODO: move this option into the .ini file
     from_classes = [1,3,11,12]          #find subsequent changes from any of these classes
     to_classes = [4,5] #                          to any of these classes
+
+    #TODO: move this option into the .ini file
     faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded
+
+    #TODO: move this option into the .ini file
     sieve = 20                  # if 0, no sieve is applied. If >0, the classification images will be sieved using gdal and all 
                                 # contiguous groups of pixels smaller than this number will be eliminated
 
+    #TODO: add the class labels and string descriptors to the .ini file and use them in the code where appropriate to document the class outputs in the log file
     '''
     e.g. classes in new matogrosso model	
     1	primary forest

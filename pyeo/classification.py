@@ -28,13 +28,14 @@ import glob
 import logging
 import os
 from tempfile import TemporaryDirectory
-
 from osgeo import gdalconst
 from osgeo import gdal
 from osgeo import osr
 from osgeo import ogr
 import pandas as pd
 import joblib
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import random
 from scipy import sparse as sp
@@ -48,7 +49,6 @@ import sys
 from pyeo.coordinate_manipulation import get_local_top_left
 from pyeo.filesystem_utilities import get_mask_path
 from pyeo.raster_manipulation import stack_images, create_matching_dataset, apply_array_image_mask, get_masked_array
-
 import pyeo.windows_compatability
 
 gdal.UseExceptions()
@@ -1087,15 +1087,16 @@ def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, ve
         x_res = image.RasterXSize
         y_res = image.RasterYSize
         pixel_width = image_gt[1]
+        #log.info("Shapefile coords during rasterisation: {},{},{},{}".format(x_min,x_max,y_min,y_max))
         target_ds = gdal.GetDriverByName('GTiff').Create(out_path, x_res, y_res, 1, gdal.GDT_Int16)
-        target_ds.SetGeoTransform((x_min, pixel_width, 0, y_min, 0, pixel_width))
+        target_ds.SetGeoTransform((x_min, pixel_width, 0, y_max, 0, -pixel_width))
         band = target_ds.GetRasterBand(1)
         band.SetNoDataValue(nodata)
         band.FlushCache()
         if attribute is not None:
-            gdal.RasterizeLayer(target_ds, [1], inlayer, options=["ATTRIBUTE={}".format(attribute)])
+            gdal.RasterizeLayer(target_ds, [1], inlayer, options=["ATTRIBUTE={}".format(attribute)])#, 'ALL_TOUCHED=TRUE'])
         else:
-            gdal.RasterizeLayer(target_ds, [1], inlayer)
+            gdal.RasterizeLayer(target_ds, [1], inlayer) #, options=['ALL_TOUCHED=TRUE'])
         #log.info("{} exists? {}".format(out_path, os.path.exists(out_path)))
         #log.info("{} exists? {}".format(os.path.dirname(shapefilename), os.path.exists(os.path.dirname(shapefilename))))
         shutil.move(out_path, outraster_filename)
@@ -1202,6 +1203,8 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 ds = None
                 shapefile_path = new_shapefile_path
             with TemporaryDirectory(dir=os.getcwd()) as td:
+                #TODO: remove this line
+                td = "/scratch/clcr/shared/heiko/models/model_test"
                 # rasterise the shapefile
                 shape_raster_path = os.path.join(td, os.path.basename(shapefile_path)[:-4]+"_rasterised.tif")
                 #log.info("Shape raster path {}".format(shape_raster_path))
@@ -1214,22 +1217,32 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 labels = labels + these_labels
                 log.info('This training data shapefile includes {} classes: {}'.format(nclasses, these_labels))
                 nbands = image.RasterCount
-                log.info("{} bands in image file".format(nbands))
+                if nbands == 1:  
+                    log.info("{} band in image file".format(nbands))
+                else: 
+                    log.info("{} bands in image file".format(nbands))
                 if len(band_names) == nbands:
                     log.info("  {}".format(band_names))
                 # compose the X,Y pixel positions (feature dataset and training dataset)
-                # 0 = missing class value
-                #log.info(image_array.shape)
-                #log.info(shape_array.shape)
-                X = image_array[:, shape_array > 0] 
-                Y = shape_array[shape_array > 0].flatten()     
-                #log.info(X.shape)
-                #log.info(Y.shape)
+                # assumed that 0 = 'no class' value
+                log.info(image_array.shape)
+                log.info(shape_array.shape)
+                for j in range(image_array.shape[0]-1):
+                    log.info("\n{}".format(shape_array[j,:]))
+                X = image_array[shape_array > 0].flatten()
+                Y = shape_array[shape_array > 0].flatten()
+                log.info(X.shape)
+                log.info(Y.shape)
                 log.info("{} training pixels in shapefile".format(len(Y)))
-                image_array = None
+                log.info("\n{}".format(X))
+                log.info("\n{}".format(Y))
+                for i in range(len(X)):
+                    if int(X[i]) != Y[i]:
+                        log.info("i={}  X={}  Y={}".format(i, X[i], Y[i]))
                 shape_array = None
-                image = None
                 rasterised_shapefile = None
+            image_array = None
+            image = None
 
             if learning_data == []:
                 learning_data = X.transpose()
@@ -1239,6 +1252,8 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 #log.info(X.shape)
                 learning_data = np.append(learning_data, X.transpose(), 0)
                 classes = np.append(classes, Y)
+                #log.info(learning_data.shape)
+                #log.info(classes.shape)
 
     # get unique list of all class labels
     labels = list(dict.fromkeys(labels))
@@ -1471,4 +1486,69 @@ def classify_rf(raster_path, modelfile, outfile, verbose = False):
 
     tmpfile.close()
     return  
+
+
+def plot_signatures(learning_path, out_path, format="PNG"):
+    """
+    Creates a graphics image file of the signature scatterplots.
+
+    Parameters
+    ----------
+    learning_path : string
+        The string containing the full directory path to the learning data input file from the model training stage saved by joblib.dump()
+    out_path : string
+        The string containing the full directory path to the output file for graphical plots
+    format : string, optional
+        GDAL format for the quicklook raster file, default PNG
+    """
+    if format != "PNG" and format != "GTiff":
+        log.warning("Invalid plot format specified. Changing to PNG.")
+        format = "PNG"
+        out_path = out_path[:-4] + "png"
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        try:
+            learning = joblib.load(learning_path)
+        except RuntimeError as e:
+            log.error("Error loading pickled learning data file: {}".format(learning_path))
+            log.error("  {}".format(e))
+            return
+        groups = learning.groupby('label')
+        for name, group in groups:
+            log.info("Length of group {} is {}".format(name, len(group)))
+        bands = learning.columns[:-1]
+        nplots = (len(bands) - 1) * (len(bands) - 2)
+        w = 5 # width of one plot in inches
+        h = w * nplots # height of the figure in inches
+        fig, ax = plt.subplots(nplots, 1, figsize=(w, h), dpi=72)
+        this = -1
+        for bx, bandx in enumerate(bands):
+            for by, bandy in enumerate(bands[bx+1:]):
+                this = this + 1 # number of the plot  
+                log.info("Making plot {} of {}".format(this + 1, nplots))
+                ax[this].margins(0.05)
+                for name, group in groups:
+                    if len(group[bandx])>10000:
+                        x = random.sample(list(group[bandx]), 10000)
+                    else:
+                        x = list(group[bandx])
+                    if len(group[bandy])>10000:
+                        y = random.sample(list(group[bandy]), 10000)
+                    else:
+                        y = list(group[bandy])
+                    ax[this].plot(x, 
+                                  y, 
+                                  marker='o', 
+                                  linestyle='', 
+                                  ms=2, 
+                                  label=name)
+                #ax[this].set_aspect('equal', adjustable='box')
+                ax[this].legend()
+                ax[this].set_xlabel(bandx)
+                ax[this].set_ylabel(bandy)
+        log.info("Saving figure to {}".format(out_path))
+        plt.savefig(out_path, dpi=72, format=format, pad_inches=0.1, facecolor='white')
+        plt.close(fig) 
+    return
+    
+
 
