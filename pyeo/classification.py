@@ -1234,8 +1234,8 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 log.info(X.shape)
                 log.info(Y.shape)
                 log.info("{} training pixels in shapefile".format(len(Y)))
-                log.info("\n{}".format(X))
-                log.info("\n{}".format(Y))
+                #log.info("\n{}".format(X))
+                #log.info("\n{}".format(Y))
                 for i in range(len(X)):
                     if int(X[i]) != Y[i]:
                         log.info("i={}  X={}  Y={}".format(i, X[i], Y[i]))
