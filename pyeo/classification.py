@@ -1229,16 +1229,11 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 log.info(shape_array.shape)
                 for j in range(image_array.shape[0]-1):
                     log.info("\n{}".format(shape_array[j,:]))
-                X = image_array[shape_array > 0].flatten()
+                X = image_array[:,shape_array > 0]
                 Y = shape_array[shape_array > 0].flatten()
                 log.info(X.shape)
                 log.info(Y.shape)
                 log.info("{} training pixels in shapefile".format(len(Y)))
-                #log.info("\n{}".format(X))
-                #log.info("\n{}".format(Y))
-                for i in range(len(X)):
-                    if int(X[i]) != Y[i]:
-                        log.info("i={}  X={}  Y={}".format(i, X[i], Y[i]))
                 shape_array = None
                 rasterised_shapefile = None
             image_array = None
