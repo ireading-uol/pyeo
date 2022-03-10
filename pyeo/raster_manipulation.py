@@ -3696,7 +3696,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
             log.info("           {}".format(histo[np.where(histo > 0)]))
             log.info("Band data min, max: {}, {}".format(data.min(), data.max()))
             colors = gdal.ColorTable()
-            if data.max() < 12:
+            if data.max() < 13:
                 log.info("Using custom colour table for up to 12 classes (0..11)")
                 colors.SetColorEntry(0, (0, 0, 0, 0)) # no data
                 colors.SetColorEntry(1, (0, 100, 0, 255)) # Primary Forest
@@ -3710,6 +3710,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
                 colors.SetColorEntry(9, (60, 60, 60, 255)) # cloud shadow 
                 colors.SetColorEntry(10, (128, 128, 128, 255)) # Haze 
                 colors.SetColorEntry(11, (46, 139, 87, 255)) # Open Woodland
+                colors.SetColorEntry(12, (92, 145, 92, 255)) # Toby's Woodland
             else:
                 log.info("Using viridis colour table for {} classes".format(data.max()))
                 viridis = cm.get_cmap('viridis', min(data.max(), 255))

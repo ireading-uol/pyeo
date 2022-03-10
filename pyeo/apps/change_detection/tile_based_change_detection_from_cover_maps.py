@@ -848,8 +848,8 @@ if __name__ == "__main__":
     max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
 
     #TODO: move this option into the .ini file
-    from_classes = [1,3,11,12]          #find subsequent changes from any of these classes
-    to_classes = [4,5] #                          to any of these classes
+    from_classes = [1,11,12]          #find subsequent changes from any of these classes
+    to_classes = [3,4,5] #                          to any of these classes
 
     #TODO: move this option into the .ini file
     faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded

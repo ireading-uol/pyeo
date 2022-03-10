@@ -1203,8 +1203,6 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 ds = None
                 shapefile_path = new_shapefile_path
             with TemporaryDirectory(dir=os.getcwd()) as td:
-                #TODO: remove this line
-                td = "/scratch/clcr/shared/heiko/models/model_test"
                 # rasterise the shapefile
                 shape_raster_path = os.path.join(td, os.path.basename(shapefile_path)[:-4]+"_rasterised.tif")
                 #log.info("Shape raster path {}".format(shape_raster_path))
