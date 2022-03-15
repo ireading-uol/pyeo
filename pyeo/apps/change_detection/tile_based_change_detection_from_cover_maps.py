@@ -55,6 +55,7 @@ def rolling_detection(config_path,
                       do_update=False,
                       do_quicklooks=False,
                       do_delete=False,
+                      do_zip=False,
                       skip_existing=False
                       ):
 
@@ -77,7 +78,18 @@ def rolling_detection(config_path,
     model_path = conf['forest_sentinel']['model']
     sen2cor_path = conf['sen2cor']['path']
     epsg = int(conf['forest_sentinel']['epsg'])
-   
+    bands = conf['processing_parameters']['band_names']
+    resolution = conf['processing_parameters']['resolution_string']
+    out_resolution = conf['processing_parameters']['output_resolution']
+    buffer_size = conf['processing_parameters']['buffer_size_cloud_masking']
+    buffer_size_composite = conf['processing_parameters']['buffer_size_cloud_masking_composite']
+    max_image_number = conf['processing_parameters']['download_limit']
+    class_labels = conf['processing_parameters']['class_labels']
+    from_classes = conf['processing_parameters']['change_from_classes']
+    to_classes = conf['processing_parameters']['change_to_classes']
+    faulty_granule_threshold = conf['processing_parameters']['faulty_granule_threshold']
+    sieve = conf['processing_parameters']['sieve']
+
     pyeo.filesystem_utilities.create_folder_structure_for_tiles(tile_root_dir)
     log = pyeo.filesystem_utilities.init_log(os.path.join(tile_root_dir, "log", tile_id+"_log.txt"))
     log.info("---------------------------------------------------------------")
@@ -90,24 +102,27 @@ def rolling_detection(config_path,
         log.info("  --build_composite for baseline composite")
         log.info("  --download_source = {}".format(download_source))
     if do_download:
-        log.info("  --do_download for change detection images")
+        log.info("  --download for change detection images")
         log.info("  --download_source = {}".format(download_source))
     if do_classify:
-        log.info("  --do_classify to apply the random forest model and create classification layers")
+        log.info("  --classify to apply the random forest model and create classification layers")
     if build_prob_image:
         log.info("  --build_prob_image to save classification probability layers")
     if do_change:
         log.info("  --change to produce change detection layers and report images")
     if do_update:
-        log.info("  --do_update to update the baseline composite with new observations")
+        log.info("  --update to update the baseline composite with new observations")
     if do_quicklooks:
-        log.info("  --do_quicklooks to create image quicklooks")
+        log.info("  --quicklooks to create image quicklooks")
     if do_delete:
-        log.info("  --do_delete to remove the downloaded L1C, L2A and cloud-masked composite layers after use")
+        log.info("  --remove all downloaded and intermediate image files after use. WARNING! IRREVERSIBLE FILE LOSS!")
+    if do_zip:
+        log.info("  --zip to archive the downloaded L1C, L2A, cloud-masked and intermediate images after use")
 
     log.info("Creating the directory structure if not already present")
 
     try:
+        change_image_dir = os.path.join(tile_root_dir, r"images")
         l1_image_dir = os.path.join(tile_root_dir, r"images/L1C")
         l2_image_dir = os.path.join(tile_root_dir, r"images/L2A")
         l2_masked_image_dir = os.path.join(tile_root_dir, r"images/cloud_masked")
@@ -323,7 +338,7 @@ def rolling_detection(config_path,
                                                           scl_classes=[0,1,2,3,8,9,10,11],
                                                           buffer_size=buffer_size_composite, 
                                                           bands=bands, 
-                                                          out_resolution=10,
+                                                          out_resolution=out_resolution,
                                                           haze=None,
                                                           epsg=epsg,
                                                           skip_existing=skip_existing)
@@ -334,6 +349,11 @@ def rolling_detection(config_path,
                                                                 chunks=chunks,
                                                                 generate_date_images=True,
                                                                 missing_data_value=0)
+
+            for roots, dirs, files in os.walk(composite_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
 
             log.info("---------------------------------------------------------------")
             log.info("Baseline image composite is complete.")
@@ -472,11 +492,19 @@ def rolling_detection(config_path,
                                                           scl_classes=[0,1,2,3,8,9,10,11],
                                                           buffer_size=buffer_size, 
                                                           bands=bands, 
-                                                          out_resolution=10,
+                                                          out_resolution=out_resolution,
                                                           haze=None,
                                                           epsg=epsg,
                                                           skip_existing=skip_existing)
 
+            for roots, dirs, files in os.walk(change_image_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+
+            log.info("---------------------------------------------------------------")
+            log.info("Cloud masking of change detection images is complete.")
+            log.info("---------------------------------------------------------------")
 
         # ------------------------------------------------------------------------
         # Step 3: Classify each L2A image and the baseline composite
@@ -504,7 +532,15 @@ def rolling_detection(config_path,
                                                    out_type="GTiff", 
                                                    chunks=chunks,
                                                    skip_existing=skip_existing)
-            log.info("End of classification.")
+
+            for roots, dirs, files in os.walk(categorised_image_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+
+            log.info("---------------------------------------------------------------")
+            log.info("Classification of all images is complete.")
+            log.info("---------------------------------------------------------------")
 
         # ------------------------------------------------------------------------
         # Step 4: Pair up the class images with the composite baseline map 
@@ -619,7 +655,19 @@ def rolling_detection(config_path,
 
             log.info("Created combined raster file with two layers: {}".format(output_product))
 
-            log.info("Change date layers done and output product aggregated.")
+            for roots, dirs, files in os.walk(sieved_image_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+
+            for roots, dirs, files in os.walk(probability_image_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+
+            log.info("---------------------------------------------------------------")
+            log.info("Change detection layers completed and output product aggregated.")
+            log.info("---------------------------------------------------------------")
 
         # ------------------------------------------------------------------------
         # Step 5: Update the baseline composite with the reflectance values of only the changed pixels.
@@ -756,22 +804,88 @@ def rolling_detection(config_path,
 
         # ------------------------------------------------------------------------
         # Step 6: Free up disk space by deleting all downloaded Sentinel-2 images and intermediate processing steps
+        #         or zip up all images that are not used anymore  
         # ------------------------------------------------------------------------
 
-        # Build new composite
         if do_delete:
             log.info("---------------------------------------------------------------")
             log.info("Deleting downloaded images and intermediate products after use to free up disk space.")
             log.info("---------------------------------------------------------------")
             log.warning("This function is currently disabled.")
             '''
-            shutil.rmtree(l1_image_dir)
-            shutil.rmtree(l2_image_dir)
-            shutil.rmtree(l2_masked_image_dir)
-            shutil.rmtree(composite_l1_image_dir)
-            shutil.rmtree(composite_l2_image_dir)
-            shutil.rmtree(composite_l2_masked_image_dir)
+            dirlist = [ l1_image_dir,
+                        l2_image_dir,
+                        l2_masked_image_dir,
+                        composite_l1_image_dir,
+                        composite_l2_image_dir,
+                        composite_l2_masked_image_dir
+                        ]
+
+            for dir in dirlist:
+                confirmation = input('Are you sure you want to delete this directory and all its contents: {} (yes/no)? '.format(dir))
+                if confirmation == "yes" or confirmation =="Yes" or confirmation =="y" or confirmation =="Y":
+                    log.info('User confirmation received to delete {}'.format(dir))
+                    shutil.rmtree(dir)
+            # Find all class images and delete them, except the class composite raster file
+            class_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() \
+                            and os.path.basename(f).endswith("_class.tif") \
+                            and not os.path.basename(f).startswith("composite")]
+            print("Marked for deletion: ")
+            for class_path in class_paths:
+                print("  {}".format(class_path))
+            confirmation = input('Are you sure you want to delete all these files (yes/no)? ')
+            if confirmation == "yes" or confirmation =="Yes" or confirmation =="y" or confirmation =="Y":
+                log.info('User confirmation received to delete class image file list:')
+                for class_path in class_paths:
+                    log.info("  {}".format(class_path))
+                    shutil.rm(class_path)
+            # Find all change images and delete them, except the report raster file
+            change_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() \
+                             and os.path.basename(f).endswith(".tif") \
+                             and os.path.basename(f).startswith("change_") ]
+            print("Marked for deletion: ")
+            for change_path in change_paths:
+                print("  {}".format(change_path))
+            confirmation = input('Are you sure you want to delete all these files (yes/no)? ')
+            if confirmation == "yes" or confirmation =="Yes" or confirmation =="y" or confirmation =="Y":
+                log.info('User confirmation received to delete change detection file list:')
+                for change_path in change_paths:
+                    log.info("  {}".format(change_path))
+                    shutil.rm(change_path)
             '''
+
+        if do_zip:
+            log.info("---------------------------------------------------------------")
+            log.info("Zipping downloaded images and intermediate products after use to free up disk space.")
+            log.info("---------------------------------------------------------------")
+            dirlist = [ l1_image_dir,
+                        l2_image_dir,
+                        l2_masked_image_dir,
+                        composite_l1_image_dir,
+                        composite_l2_image_dir,
+                        composite_l2_masked_image_dir
+                        ]
+
+            for dir in dirlist:
+                paths = [f for f in os.listdir(dir)]
+                for f in paths:
+                    log.info('Zipping file {}'.format(f))
+                    shutil.make_archive(f[:-4]+'.zip', 'zip', f)
+
+            # Find all class images and archive them, except the class composite raster file
+            class_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() \
+                            and os.path.basename(f).endswith("_class.tif") \
+                            and not os.path.basename(f).startswith("composite")]
+            for class_path in class_paths:
+                log.info("Zipping file {}".format(class_path))
+                shutil.make_archive(class_path[:-4]+'.zip', 'zip', class_path)
+            # Find all change images and archive them, except the report raster file
+            change_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() \
+                             and os.path.basename(f).endswith(".tif") \
+                             and os.path.basename(f).startswith("change_") ]
+            for change_path in change_paths:
+                log.info("Zipping file {}".format(change_path))
+                shutil.make_archive(change_path[:-4]+'.zip', 'zip', change_path)
 
         # ------------------------------------------------------------------------
         # End of processing
@@ -799,7 +913,7 @@ if __name__ == "__main__":
     parser.add_argument('--start_date', dest='arg_start_date', help="Overrides the start date in the config file. Set to "
                                                                 "LATEST to get the date of the last merged accquistion")
     parser.add_argument('--end_date', dest='arg_end_date', help="Overrides the end date in the config file. Set to TODAY"
-                                                            "to get today's date")
+                                                                "to get today's date")
     parser.add_argument('-b', '--build_composite', dest='build_composite', action='store_true', default=False,
                         help="If present, creates a cloud-free (ish) composite between the two dates specified in the "
                              "config file.")
@@ -824,55 +938,14 @@ if __name__ == "__main__":
     parser.add_argument('-q', '--quicklooks', dest='do_quicklooks', action='store_true', default=False,
                         help="Creates quicklooks for all composites, L2A change images, classified images and probability images.")
     parser.add_argument('-r', '--remove', dest='do_delete', action='store_true', default=False,
-                        help="Not implemented. If present, removes all images in images/ to save space.")
+                        help="Not currently available. If present, removes all intermediate images to save space.")
+    parser.add_argument('-z', '--zip', dest='do_zip', action='store_true', default=False,
+                        help="If present, archives all intermediate images to save space.")
     parser.add_argument('-s', '--skip', dest='skip_existing', action='store_true', default=False,
                         help="If chosen, existing output files will be skipped in the production process.")
 
     args = parser.parse_args()
 
-    #TODO: bands and resolution can be made flexible BUT the bands need to be at the same resolution
-
-    #TODO: move this option into the .ini file
-    bands = ['B02', 'B03', 'B04', 'B08']
-
-    #TODO: move this option into the .ini file
-    resolution = '10m'
-
-    #TODO: move this option into the .ini file
-    buffer_size = 20            #set buffer in number of pixels for dilating the SCL cloud mask (recommend 30 pixels of 10 m) for the change detection
-
-    #TODO: move this option into the .ini file
-    buffer_size_composite = 10  #set buffer in number of pixels for dilating the SCL cloud mask (recommend 10 pixels of 10 m) for the composite building
-
-    #TODO: move this option into the .ini file
-    max_image_number = 30       #maximum number of images to be downloaded for compositing, in order of least cloud cover
-
-    #TODO: move this option into the .ini file
-    from_classes = [1,11,12]          #find subsequent changes from any of these classes
-    to_classes = [3,4,5] #                          to any of these classes
-
-    #TODO: move this option into the .ini file
-    faulty_granule_threshold = 400 # granules below this size in MB will not be downloaded
-
-    #TODO: move this option into the .ini file
-    sieve = 20                  # if 0, no sieve is applied. If >0, the classification images will be sieved using gdal and all 
-                                # contiguous groups of pixels smaller than this number will be eliminated
-
-    #TODO: add the class labels and string descriptors to the .ini file and use them in the code where appropriate to document the class outputs in the log file
-    '''
-    e.g. classes in new matogrosso model	
-    1	primary forest
-    2	plantation forest
-    3	bare soil
-    4	crops
-    5	grassland
-    6	open water
-    7	burn scar
-    8	cloud
-    9	cloud shadow
-    10	haze
-    11	open woodland
-    '''
-
-
     rolling_detection(**vars(args))
+
+

@@ -1063,14 +1063,18 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             else:
                 ys = ysize - ch * chunksize
             #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
-            res = [] # reset the stack of band rasters from all time slices
+            #res = []
+            res = () # reset the tuple of band rasters from all time slices
             for f in in_raster_path_list:
                 #log.info("Opening raster {}".format(f)) 
                 ds = gdal.Open(f)
-                b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
-                res.append(b)
+                res = res + (ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys))
+                #b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
+                #res.append(b)
                 ds = None
-            stacked = np.dstack(res)
+            #TODO: test this
+            #stacked = np.dstack(res)
+            stacked = np.stack(res)
             #TODO: make sure this catches all pixels with missing values
             if missing_data_value is not None:
                 ma = np.ma.masked_equal(stacked, missing_data_value)
@@ -2431,7 +2435,7 @@ def stack_sentinel_2_bands(safe_dir, out_image_path, bands=("B02", "B03", "B04",
             if get_image_resolution(band_path) != out_resolution:
                 resample_path = os.path.join(resample_dir, os.path.basename(band_path))
                 shutil.copy(band_path, resample_path)
-                resample_image_in_place(resample_path, out_resolution)  # why did I make this the only in-place function?
+                resample_image_in_place(resample_path, out_resolution)
                 new_band_paths.append(resample_path)
             else:
                 new_band_paths.append(band_path)
@@ -2764,7 +2768,12 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
             l2_name = os.path.basename(l2_path)
             #log.info("Changing L2A path: {}".format(l2_path))
             #log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
-            os.rename(l2_path, os.path.join(out_directory, l2_name))
+            if os.path.exists(l2_path):
+                os.rename(l2_path, os.path.join(out_directory, l2_name))
+            else:
+                log.error("L2A path not found after atmospheric correction with Sen2Cor: {}".format(l2_path))
+    return
+
 
 
 def create_mask_from_model(image_path, model_path, model_clear=0, num_chunks=10, buffer_size=0):
@@ -3696,6 +3705,20 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
             log.info("           {}".format(histo[np.where(histo > 0)]))
             log.info("Band data min, max: {}, {}".format(data.min(), data.max()))
             colors = gdal.ColorTable()
+            #TODO: load a colour table (QGIS style file) from file if specified as an option by the function call
+            '''
+            Comment: A *.qml file contains:
+            <colorPalette>
+               <paletteEntry label="0" color="#000000" alpha="255" value="0"/>
+               <paletteEntry label="1" color="#287d28" alpha="255" value="1"/>
+               <paletteEntry label="3" color="#c28540" alpha="255" value="3"/>
+               <paletteEntry label="4" color="#e1de0b" alpha="255" value="4"/>
+               <paletteEntry label="5" color="#bbdc00" alpha="255" value="5"/>
+               <paletteEntry label="11" color="#69de33" alpha="255" value="11"/>
+               <paletteEntry label="12" color="#3cd24b" alpha="255" value="12"/>
+            </colorPalette>
+            '''
+
             if data.max() < 13:
                 log.info("Using custom colour table for up to 12 classes (0..11)")
                 colors.SetColorEntry(0, (0, 0, 0, 0)) # no data

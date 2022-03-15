@@ -82,6 +82,7 @@ from botocore.exceptions import ClientError
 from requests import Request
 from sentinelhub import download_safe_format
 from sentinelsat import SentinelAPI, geojson_to_wkt, read_geojson
+import tenacity
 
 from pyeo.filesystem_utilities import check_for_invalid_l2_data, check_for_invalid_l1_data, get_sen_2_image_tile
 import pyeo.filesystem_utilities as fu
@@ -136,6 +137,10 @@ def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, st
 
 def _file_api_query(user, passwd, start_date, end_date, filename, cloud=100, producttype="S2MSI2A"):
     api = SentinelAPI(user, passwd, timeout=600)
+    # try 20 times to connect to the server if it is not responding before producing an error
+    @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(300))
+    def query(*args, **kwargs):
+        return api.query(*args, **kwargs)
     query_kwargs = {
         'platformname': 'Sentinel-2',
         'date': (start_date, end_date),
@@ -144,13 +149,18 @@ def _file_api_query(user, passwd, start_date, end_date, filename, cloud=100, pro
         }
     kw = query_kwargs.copy()
     kw['raw'] = f'filename:{filename}'
-    products = api.query(**kw)
+    #products = api.query(**kw)
+    products = query(**kw) # call the query function with the tenacity decorator
     return(products)
 
 
 def _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0, 
     producttype="S2MSI1C", filename=None):
     api = SentinelAPI(user, passwd, timeout=600)
+    # try 20 times to connect to the server if it is not responding before producing an error
+    @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(300))
+    def query(*args, **kwargs):
+        return api.query(*args, **kwargs)
     query_kwargs = {
         'platformname': 'Sentinel-2',
         'cloudcoverpercentage': (0, cloud),
@@ -164,7 +174,8 @@ def _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud=100, star
     kw = query_kwargs.copy()
     if filename is not None:
         kw['raw'] = f'filename:{filename}'
-    products = api.query(**kw)
+    #products = api.query(**kw)
+    products = query(**kw) # call the query function with the tenacity decorator
     return(products)
 
 
@@ -234,10 +245,15 @@ def _sentinelsat_query(user, passwd, footprint_wkt, start_date, end_date, cloud=
     """
     # Originally by Ciaran Robb
     api = SentinelAPI(user, passwd, timeout=600)
-    products = api.query(footprint_wkt,
-                         date=(start_date, end_date), platformname="Sentinel-2",
-                         cloudcoverpercentage="[0 TO {}]".format(cloud),
-                         url=rest_url)
+    # try 20 times to connect to the server if it is not responding before producing an error
+    @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(300))
+    def query(*args, **kwargs):
+        return api.query(*args, **kwargs)
+    products = query(footprint_wkt,
+                     date=(start_date, end_date), 
+                     platformname="Sentinel-2",
+                     cloudcoverpercentage="[0 TO {}]".format(cloud),
+                     url=rest_url)
     return products
 
 

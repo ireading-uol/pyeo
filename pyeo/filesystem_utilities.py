@@ -224,7 +224,7 @@ def get_raster_paths(paths, filepatterns, dirpattern):
             #log.info("  filepattern = {}".format(filepattern))
             f = get_filenames(path, filepattern, dirpattern)
             if len(f) == 1:
-                row.append(f)
+                row = row+[f]
             if len(f) > 1:
                 log.error("More than one file path returned in raster path search:")
                 log.error("  root        = {}".format(path))
@@ -233,17 +233,17 @@ def get_raster_paths(paths, filepatterns, dirpattern):
                 log.info("The search returned:")
                 for i in f:
                     log.info("  {}".format(i))
-                row.append("")
+                row = row + []
             if len(f) == 0:
                 log.info("File pattern {} and dir pattern {} not found in {}".format(filepattern, dirpattern, path))
-                row.append("")
+                row = row + []
         #log.info("  results = {}".format(results))
         #log.info("  paths   = {}".format(paths))
         #log.info("  row     = {}".format(row))
         results.extend(row)
-        #log.info("  results = {}".format(results))
+    log.info("  results of found files = {}".format(results))
     if len(results) == len(paths) * (len(filepatterns) + 1):
-        arr = np.array(results).reshape(len(paths), len(filepatterns)+1)
+        arr = np.array(results, dtype=object).reshape(len(paths), len(filepatterns)+1)
     else:
         log.error("  Array shape = {}".format(arr.shape))
         log.error("  Cols = {}".format(cols))
