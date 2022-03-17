@@ -32,6 +32,7 @@ import configparser
 import copy
 import argparse
 import glob
+import json
 import numpy as np
 import os
 from osgeo import gdal
@@ -78,17 +79,17 @@ def rolling_detection(config_path,
     model_path = conf['forest_sentinel']['model']
     sen2cor_path = conf['sen2cor']['path']
     epsg = int(conf['forest_sentinel']['epsg'])
-    bands = conf['processing_parameters']['band_names']
+    bands = json.loads(conf.get('processing_parameters', 'band_names'))
     resolution = conf['processing_parameters']['resolution_string']
-    out_resolution = conf['processing_parameters']['output_resolution']
-    buffer_size = conf['processing_parameters']['buffer_size_cloud_masking']
-    buffer_size_composite = conf['processing_parameters']['buffer_size_cloud_masking_composite']
-    max_image_number = conf['processing_parameters']['download_limit']
-    class_labels = conf['processing_parameters']['class_labels']
-    from_classes = conf['processing_parameters']['change_from_classes']
-    to_classes = conf['processing_parameters']['change_to_classes']
-    faulty_granule_threshold = conf['processing_parameters']['faulty_granule_threshold']
-    sieve = conf['processing_parameters']['sieve']
+    out_resolution = int(conf['processing_parameters']['output_resolution'])
+    buffer_size = int(conf['processing_parameters']['buffer_size_cloud_masking'])
+    buffer_size_composite = int(conf['processing_parameters']['buffer_size_cloud_masking_composite'])
+    max_image_number = int(conf['processing_parameters']['download_limit'])
+    class_labels = json.loads(conf.get('processing_parameters', 'class_labels'))
+    from_classes = json.loads(conf.get('processing_parameters', 'change_from_classes'))
+    to_classes = json.loads(conf.get('processing_parameters', 'change_to_classes'))
+    faulty_granule_threshold = int(conf['processing_parameters']['faulty_granule_threshold'])
+    sieve = int(conf['processing_parameters']['sieve'])
 
     pyeo.filesystem_utilities.create_folder_structure_for_tiles(tile_root_dir)
     log = pyeo.filesystem_utilities.init_log(os.path.join(tile_root_dir, "log", tile_id+"_log.txt"))
@@ -119,7 +120,15 @@ def rolling_detection(config_path,
     if do_zip:
         log.info("  --zip to archive the downloaded L1C, L2A, cloud-masked and intermediate images after use")
 
-    log.info("Creating the directory structure if not already present")
+    log.info("List of image bands: {}".format(bands))
+    log.info("Model used: {}".format(model_path))
+    log.info("List of class labels:")
+    for c, this_class in enumerate(class_labels):
+        log.info("  {} : {}".format(c+1, this_class))
+    log.info("Detecting changes from any of the classes: {}".format(from_classes))
+    log.info("                    to any of the classes: {}".format(to_classes))
+
+    log.info("\nCreating the directory structure if not already present")
 
     try:
         change_image_dir = os.path.join(tile_root_dir, r"images")
@@ -214,7 +223,7 @@ def rolling_detection(config_path,
 
             rel_orbits = np.unique(l1c_products['relativeorbitnumber'])
             if len(rel_orbits) > 0:
-                if l1c_products.shape[0] > max_image_number/len(rel_orbits):
+                if l1c_products.shape[0] > max_image_number / len(rel_orbits):
                     log.info("Capping the number of L1C products to {}".format(max_image_number))
                     log.info("Relative orbits found covering tile: {}".format(rel_orbits))
                     uuids = []
@@ -316,7 +325,7 @@ def rolling_detection(config_path,
                                                             passwd=sen_pass, 
                                                             try_scihub_on_fail=True)
 
-            # check for incomplete L2A downloads and remove them
+            # check for incomplete L2A downloads
             incomplete_downloads, sizes = pyeo.raster_manipulation.find_small_safe_dirs(composite_l2_image_dir, threshold=faulty_granule_threshold*1024*1024)
             if len(incomplete_downloads) > 0:
                 for index, safe_dir in enumerate(incomplete_downloads):
@@ -328,12 +337,12 @@ def rolling_detection(config_path,
             log.info("Image download and atmospheric correction for composite is complete.")
             log.info("---------------------------------------------------------------")
 
-            l2a_paths = [ f.path for f in os.scandir(composite_l2_image_dir) if f.is_dir() ]
+            #l2a_paths = [ f.path for f in os.scandir(composite_l2_image_dir) if f.is_dir() ]
             #raster_paths = pyeo.filesystem_utilities.get_raster_paths(l2a_paths, filepatterns=bands, dirpattern=resolution) # don't really need to know these
             #scl_raster_paths = pyeo.filesystem_utilities.get_raster_paths(l2a_paths, filepatterns=["SCL"], dirpattern="20m") # don't really need to know these
 
             log.info("Applying simple cloud, cloud shadow and haze mask based on SCL files and stacking the masked band raster files.")
-            pyeo.raster_manipulation.apply_scl_cloud_mask(composite_l2_image_dir, 
+            pyeo.raster_manipulation.apply_scl_cloud_mask(composite_l2_image_dir,
                                                           composite_l2_masked_image_dir, 
                                                           scl_classes=[0,1,2,3,8,9,10,11],
                                                           buffer_size=buffer_size_composite, 

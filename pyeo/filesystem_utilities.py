@@ -206,11 +206,9 @@ def get_raster_paths(paths, filepatterns, dirpattern):
       paths = list of strings indicating the path to a root directory in which the search will be done
       filepatterns = list of strings of the file name patterns to search for
       dirpattern = string of the directory name pattern to search for
-
     Returns:
       a dataframe of all found file paths, one line per path
     '''
-
     cols = ['safe_path']
     for filepattern in filepatterns:
         cols.append(filepattern)
@@ -224,30 +222,34 @@ def get_raster_paths(paths, filepatterns, dirpattern):
             #log.info("  filepattern = {}".format(filepattern))
             f = get_filenames(path, filepattern, dirpattern)
             if len(f) == 1:
-                row = row+[f]
+                row.append(f)
             if len(f) > 1:
-                log.error("More than one file path returned in raster path search:")
-                log.error("  root        = {}".format(path))
-                log.error("  filepattern = {}".format(filepattern))
-                log.error("  dirpattern  = {}".format(dirpattern))
+                log.warning("More than one file path returned in raster path search:")
+                log.warning("  root        = {}".format(path))
+                log.warning("  filepattern = {}".format(filepattern))
+                log.warning("  dirpattern  = {}".format(dirpattern))
                 log.info("The search returned:")
                 for i in f:
                     log.info("  {}".format(i))
-                row = row + []
+                row.append("")
             if len(f) == 0:
                 log.info("File pattern {} and dir pattern {} not found in {}".format(filepattern, dirpattern, path))
-                row = row + []
+                row.append("")
         #log.info("  results = {}".format(results))
         #log.info("  paths   = {}".format(paths))
         #log.info("  row     = {}".format(row))
         results.extend(row)
-    log.info("  results of found files = {}".format(results))
+        #log.info("  results = {}".format(results))
+    #TODO: the following line expects exactly one search result per path. Challenge that assumption
     if len(results) == len(paths) * (len(filepatterns) + 1):
-        arr = np.array(results, dtype=object).reshape(len(paths), len(filepatterns)+1)
+        arr = np.array(results).reshape(len(paths), len(filepatterns)+1)
+        results=pd.DataFrame(arr, columns=cols)
     else:
-        log.error("  Array shape = {}".format(arr.shape))
-        log.error("  Cols = {}".format(cols))
-    results=pd.DataFrame(arr, columns=cols)
+        log.warning("  Unexpected shape of file name pattern search results:")
+        log.warning("    Results      = {}".format(results))
+        log.warning("    Column names = {}".format(cols))
+        log.warning("    Returning an empty string.")
+        results = ""
     #log.info("  DF = {}".format(results))
     return(results)
 

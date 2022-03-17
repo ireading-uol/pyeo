@@ -1063,18 +1063,20 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             else:
                 ys = ysize - ch * chunksize
             #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
-            #res = []
-            res = () # reset the tuple of band rasters from all time slices
+            res = [] #reset the list of arrays that will contain the band rasters
             for f in in_raster_path_list:
-                #log.info("Opening raster {}".format(f)) 
+                #log.info("Opening band {} from raster {}".format(band, f)) 
                 ds = gdal.Open(f)
-                res = res + (ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys))
-                #b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
-                #res.append(b)
+                b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
+                if ds == None:
+                    log.error("Opening band {} from raster {} failed. Skipping.".format(band, f)) 
+                else:
+                    res.append(b)
                 ds = None
-            #TODO: test this
-            #stacked = np.dstack(res)
-            stacked = np.stack(res)
+            #for i, this_res in enumerate(res):
+            #    log.info("raster {} is {} and is of type {}".format(i, this_res, type(this_res)))
+            #    log.info("raster {} has dimensions {}".format(i, this_res.shape))
+            stacked = np.dstack(res)
             #TODO: make sure this catches all pixels with missing values
             if missing_data_value is not None:
                 ma = np.ma.masked_equal(stacked, missing_data_value)
@@ -2296,8 +2298,7 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
 
     """
     safe_file_path_list = [os.path.join(l2_dir, safe_file_path)
-                           for safe_file_path
-                           in os.listdir(l2_dir)
+                           for safe_file_path in os.listdir(l2_dir)
                            if safe_file_path.endswith(".SAFE")]
     for l2_safe_file in safe_file_path_list:
         log.info("  L2A raster file: {}".format(l2_safe_file))
@@ -2305,6 +2306,7 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
         pattern = f.split("_")[0]+"_"+f.split("_")[1]+"_"+f.split("_")[2]+"_"+f.split("_")[3]+"_"+f.split("_")[4]+"_"+f.split("_")[5]
         #log.info("  Granule ID  : {}".format(f))
         #log.info("  File pattern: {}".format(pattern))
+        # Find existing matching files in the output directory
         df = get_raster_paths([out_dir], filepatterns=[pattern], dirpattern="")
         for i in range(len(df)):
             if df[pattern][i] != "" and skip_existing:
