@@ -3101,6 +3101,270 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     return out_path
 
 
+def __change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to, report_path, 
+                             skip_existing=False, old_image_dir=None, new_image_dir=None, viband1=None, viband2=None, threshold=None):
+    """
+    UNTESTED DEVELOPMENT VERSION:
+                    # This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
+                    # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
+                    #TODO: In change_from_class_maps(), add a flag (e.g. -1) whether a pixel was a cloud in the later image.
+                    # Update report layer as we go along. Iterative updating gets us out of the pattern search problem.
+
+
+    This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
+    in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
+    Optionally, changes will be confirmed by thresholding a vegetation index calculated from two bands if the difference between
+    the more recent date and the older date is below the confirmation threshold (e.g. NDVI < -0.2).
+    It then updates the report file which has three layers:
+      (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
+      (2) pixels show the number of change detections (summed up over time)
+      (3) pixels show the number of consecutive change detections, omitting cloudy observations but resetting counter when no change is detected
+
+    Parameters
+    ----------
+    old_class_path : str
+        Paths to a classification map to be used as the baseline map for the change detection.
+
+    new_class_path : str
+        Paths to a classification map with a newer acquisition date.
+
+    change_raster : str
+        Path to the output raster file that will be created.
+
+    change_from : list of int
+        List of integers with the class codes to be used as 'from' in the change detection.
+
+    change_to : list of int
+        List of integers with the class codes to be used as 'to' in the change detection.
+
+    report_path : str
+        Path to an aggregated report map that will be continuously updated with change detections from newer acquisition dates. 
+        Will be created if it does not exist.
+
+    skip_existing : boolean
+        If True, skip the production of files that already exist.
+
+    old_image_dir : str
+        Path to the directory containing the spectral image file with a matching timestamp to the old_class_path for vegetation index calculation.
+
+    new_image_dir : str
+        Path to the directory containing the spectral image file with a matching timestamp to the new_class_path for vegetation index calculation.
+
+    viband1 : int
+        If given, this is the first band number (start from band 1) for calculating the vegetation index from a raster file with matching timestamp:
+        vi = (viband1 - viband2) / (viband1 + viband2)
+
+    viband2 : int
+        If given, this is the second band number (start from band 1) for calculating the vegetation index from a raster file with matching timestamp
+        vi = (viband1 - viband2) / (viband1 + viband2)
+
+    threshold : float
+        If given, this is the threhold for checking change detections based on the vegetation index:
+        A change pixel is confirmed if vi < threshold and discarded otherwise.
+
+    Returns:
+    ----------
+    change_raster : str (path to a raster file of type Int32)
+        The path to the new change layer containing the acquisition date of the new class image
+        expressed as the difference to the 1/1/2000, where a change has been found, -1 for cloudy pixels 
+        or missing data in the more recent classification map (pixels == 0) or zero otherwise.
+    """
+
+    if not os.path.exists(report_path):
+        log.info("Report file does not exist yet and will be created: {}".format(report_path))
+        new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
+        report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=3, datatype=gdal.GDT_Int32)
+        new_class_image = None
+        report_image = None
+    if not os.path.exists(report_path):
+        log.error("File creation failed. Skipping change detection step.")
+        return -1
+
+    # create masks from the classes of interest
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        if not ( skip_existing and os.path.exists(change_raster) ):
+            from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path, 
+                                                              out_path = os.path.join(td, os.path.basename(old_class_path)[:-4] + "_temp.msk"),
+                                                              classes_of_interest = change_from)
+            to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path, 
+                                                              out_path = os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
+                                                              classes_of_interest = change_to)
+            if from_class_mask_path == "" or to_class_mask_path == "":
+                log.warning("Cannot create change raster from:")
+                log.warning("        {}".format(old_class_path))
+                log.warning("   and  {}".format(new_class_path))
+                return ""
+            # combine masks by finding pixels that are 1 in the old mask and 1 in the new mask
+            added_mask_path = add_masks([from_class_mask_path, to_class_mask_path], os.path.join(td, "combined.msk"), geometry_func="intersect")
+            log.info("added mask path {}".format(added_mask_path))
+            new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
+            new_class_array = new_class_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+            change_image = create_matching_dataset(new_class_image, change_raster, format='GTiff', bands=1, datatype=gdal.GDT_Int32)
+            change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write).squeeze()
+            added_mask = gdal.Open(added_mask_path, gdal.GA_ReadOnly)
+            added_mask_array = added_mask.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+            # Gets timestamp as integer in form yyyymmdd
+            new_date = get_image_acquisition_time(new_class_path)
+            reference_date = datetime.datetime(2000,1,1,0,0,0,0)
+            date_difference = new_date - reference_date
+            date = np.uint32(date_difference.total_seconds() / 60 / 60 / 24) #convert to 24-hour days
+            log.info("date = {}".format(date))
+            # replace all pixels != 2 with 0 and all pixels == 2 with the new acquisition date
+            change_array[np.where(added_mask_array == 2)] = date
+            change_array[np.where(added_mask_array != 2)] = 0
+            # set clouds and missing values in latest class image to -1 in the change layer
+            change_array[np.where(new_class_array == 0)] = -1
+
+            #TODO: *** add         vi = (viband1 - viband2) / (viband1 + viband2) < threshold
+            if viband1 is not None and viband2 is not None and threshold is not None:
+                log.info("Confirming detected class transitions based on vegetation index differencing.")
+                log.info("  VI = (band{} - band{}) / (band{} - band{})".format(viband1, viband2, viband1, viband2))
+                log.info("  confirming changes if VI_new - VI_old < {}".format(threshold))
+
+                # get composite file name and find bands in composite
+                old_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(old_class_path))
+                old_image_path = [ f.name for f in os.scandir(old_image_dir) if f.is_file() \
+                                              and f.name.startswith("composite_") \
+                                              and old_timestamp.strftime("%Y%m%dT%H%M%S") in f.name \
+                                              and f.name.endswith(".tif")][0]
+                if len(old_image_path) > 0:
+                    log.info("Found old satellite image: {}".format(old_image_path))
+    
+                    # open file and read bands
+                    old_image = gdal.Open(os.path.join(old_image_dir, old_image_path), gdal.GA_ReadOnly)
+                    old_image_array = old_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+
+                    # calculate composite VI (N.B. -1 because array starts numbering with 0 and GDAL numbers bands from 1
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        vi_old = np.true_divide((1.0 * old_image_array[viband1-1,:,:] - 1.0 * old_image_array[viband2-1,:,:]),
+                                                (1.0 * old_image_array[viband1-1,:,:] + 1.0 * old_image_array[viband2-1,:,:]))
+                        vi_old[vi_old == np.inf] = 0
+                        vi_old = np.nan_to_num(vi_old)
+
+                    old_image_array = None
+                    old_image = None
+
+                    # get change image file name and find bands in change image
+                    new_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
+                    new_image_path = [ f.name for f in os.scandir(new_image_dir) if f.is_file() \
+                                                  and f.name.startswith("S2") \
+                                                  and new_timestamp.strftime("%Y%m%dT%H%M%S") in f.name \
+                                                  and f.name.endswith(".tif")][0]
+
+                    if len(new_image_path) > 0:
+                        log.info("Found new satellite image: {}".format(new_image_path))
+
+                        # open file and read bands
+                        new_image = gdal.Open(os.path.join(new_image_dir, new_image_path), gdal.GA_ReadOnly)
+                        new_image_array = new_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+
+                        # calculate change image VI
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            vi_new = np.true_divide((1.0 * new_image_array[viband1-1,:,:] - 1.0 * new_image_array[viband2-1,:,:]),
+                                                    (1.0 * new_image_array[viband1-1,:,:] + 1.0 * new_image_array[viband2-1,:,:]))
+                            vi_new[vi_new == np.inf] = 0
+                            vi_new = np.nan_to_num(vi_new)
+                        new_image_array = None
+                        new_image = None
+
+                        # calculate dVI = new minus old VI
+                        dvi = vi_new - vi_old
+                        vi_new = None 
+                        vi_old = None
+ 
+                        # set all values where the VI difference exceeds the threshold to zero (no change)
+                        change_array[np.where(dvi >= threshold)] = 0
+                        dvi = None
+
+                    else:
+                        log.error("Did not find a new satellite image with name pattern: {}".format(new_timestamp.strftime("%Y%m%dT%H%M%S")))
+                        log.error("Skipping vegetation index calculation and confirmation of change detections.")
+
+                else:
+                    log.error("Did not find an old satellite image with name pattern: {}".format(old_timestamp.strftime("%Y%m%dT%H%M%S")))
+                    log.error("Skipping vegetation index calculation and confirmation of change detections.")
+
+
+            # save change layer
+            new_class_array = None
+            new_class_image = None
+            added_mask_array = None
+            added_mask = None
+            change_array = None
+            change_image = None
+        else:
+            log.info("Change raster file already exists: {}. Skipping change raster creation.".format(change_raster))
+
+        #TODO: *** within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
+
+        # ensure that the date of the new change layer is AFTER the report file was last updated
+        report_last_updated_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[1]
+        new_changes_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(change_raster))[1]
+        # pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
+        if report_last_updated_timestamp > new_changes_timestamp:
+            log.warning("Date of the new change map is not recent enough to update the current report image product: ")
+            log.warning("  report image: {}".format(report_path))
+            log.warning("  last updated: {}".format(report_last_updated_timestamp))
+            log.warning("  change image:  {}".format(change_raster))
+            log.warning("  updated:      {}".format(new_changes_timestamp))
+            log.warning("Skipping updating of report image product.")
+            return change_raster
+        else:
+            log.info("Updating current report image product with the new change map: ")
+            log.info("  report image: {}".format(report_path))
+            log.info("  last updated: {}".format(report_last_updated_timestamp))
+            log.info("  change image:  {}".format(change_raster))
+            log.info("  updated:      {}".format(new_changes_timestamp))
+        # now update the report file layers
+        change_image = gdal.Open(change_raster, gdal.GA_ReadOnly)
+        change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
+        report_image = gdal.Open(report_path, gdal.GA_Update)
+        out_report_array = report_image.GetVirtualMemArray(eAccess=gdal.GA_Update).squeeze()
+        reference_projection = report_image.GetProjection()
+        projection = change_image.GetProjection()
+        if projection != reference_projection:
+            log.warning("Skipping change layer with a different map projection: {} is not the same as {}".format(change_raster, report_path))
+            change_image = None
+            report_image = None
+            return -1
+        # layer 0 contains the earlier date of a change detection where values are greater than zero (not missing data and not cloud)
+        log.info("layer 0 contains the earlier date of a change detection where values are greater than zero (not missing data and not cloud)")
+        # where layer 0 > 0 and the change array contains a value > 0, the smaller value of the two will be burned into the report layer 0
+        locs = ( (out_report_array[0, :, :] > 0) & (change_array > 0) )
+        out_report_array[0, locs] = np.minimum(out_report_array[0, locs], change_array[locs])
+        # where layer 0 is zero and the change array contains a value > 0, it will be burned into the report layer 0
+        locs = ( (out_report_array[0, :, :] == 0) & (change_array > 0) )
+        out_report_array[0, locs] = change_array[locs]
+        
+        # layer 1 contains an additive map of the number of positive change detections
+        log.info("layer 1 contains an additive map of the number of positive change detections")
+        locs = ( change_array > 0 )
+        out_report_array[1, locs] = out_report_array[1, locs] + 1
+
+        # layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and 
+        #   decreasing the counter whenever no change is detected, i.e. change array == 0
+        log.info("layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and") 
+        log.info("   decreasing the counter whenever no change is detected, i.e. change array == 0")
+        # increase counter if a change was detected
+        log.info("   - increase counter if a change was detected")
+        locs = ( change_array > 0 )
+        out_report_array[2, locs] = out_report_array[2, locs] + 1
+        # reset the counter if no change was detected
+        log.info("   - decrease the counter if no change was detected")
+        locs = ( change_array == 0 )
+        out_report_array[2, locs] = out_report_array[2, locs] - 1
+
+        log.info("   - save and close the file")
+        change_array = None
+        change_image = None
+        out_report_array = None
+        report_image = None
+        log.info("   - return from the function")
+
+    return change_raster
+
+
+
 def change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to, skip_existing=False):
     """
     This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
@@ -3760,7 +4024,126 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         out_image = None
         image = None
     return out_raster_path
+
     
+def __combine_date_maps(date_image_paths, output_product):
+    '''
+    UNTESTED DEVELOPMENT VERSION:
+                #TODO: In combine_date_maps, also extract the length of consecutive detections over time.
+                #TODO: Add a third layer with the length of confirmation sequence over time.
+                       -1 in the change layers indicates cloudy pixels
+    Combines all change date layers into one output raster with three layers:
+      (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
+      (2) pixels show the number of change detection dates (summed up over all change images in the folder)
+      (3)
+
+    Parameters
+    ----------
+    date_image_paths : list of strings
+        Containing the full directory paths to the input files with the detection dates as pixel values in UInt32 format
+    output_product : string
+        The string containing the full directory path to the output file for the 2-layer raster file
+
+    Returns
+    -------
+    output_product : string
+        The string containing the full directory path to the output file for the 2-layer raster file
+    '''
+
+    log = logging.getLogger(__name__)
+    # check which files in the list of input files are not found
+    notfound = []
+    for path in date_image_paths:
+        if not os.path.exists(path):
+            log.warning("Change detection image does not exist and will be removed from the report creation: {}".format(path))
+            notfound = notfound + [path]
+    for path in notfound:
+        date_image_paths.remove(path)
+    # check which files can be opened
+    corrupted = []
+    for path in date_image_paths:
+        try:
+            open_file = gdal.Open(path)
+            open_file = None
+        except:
+            log.warning("Cannot open file: {}".format(path))
+            corrupted = corrupted + [path]
+    for path in corrupted:
+        date_image_paths.remove(path)
+
+    if len(date_image_paths) == 0:
+        log.warning("No valid input files remain for report image creation.")
+        return
+
+    date_images = [gdal.Open(path) for path in date_image_paths]
+
+    # ensure the images have the same map projection
+    reference_projection = date_images[0].GetProjection()
+    different_projection = []
+    for index, date_image in enumerate(date_images):
+        projection = date_image.GetProjection()
+        if projection != reference_projection:
+            log.warning("Skipping image with a different map projection: {} is not the same as {}".format(date_image, date_images[0]))
+            different_projection = different_projection + date_image
+    for image in different_projection:
+        date_images.remove(image)
+    if len(date_images) == 0:
+        log.warning("No valid input files remain for report image creation.")
+        date_images = None
+        return
+
+    out_raster = create_matching_dataset(date_images[0], output_product, format='GTiff', bands=2, datatype = gdal.GDT_UInt32)
+    # Squeeze() to account for unaccountable extra dimension Windows patch adds
+    out_raster_array = out_raster.GetVirtualMemArray(eAccess=gdal.GF_Write).squeeze()
+    out_raster_array[:, :, :] = 0 # [bands, y, x]
+    reference_projection = date_images[0].GetProjection()
+    time_steps = len(date_images)
+    for index, date_image in enumerate(date_images):
+        #TODO: *** within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
+        projection = date_image.GetProjection()
+        if projection != reference_projection:
+            log.warning("Skipping image with a different map projection: {} is not the same as {}".format(date_image, date_images[0]))
+            time_steps = time_steps - 1
+            continue
+        date_array = date_image.GetVirtualMemArray().squeeze()
+        locs = ( (out_raster_array[0, :, :] > 0) & (date_array > 0) )
+        out_raster_array[0, locs] = np.minimum(out_raster_array[0, locs], date_array[locs])
+        locs = ( (out_raster_array[0, :, :] == 0) & (date_array > 0) )
+        out_raster_array[0, locs] = date_array[locs]
+        date_mask = np.where(date_array > 0, 1, 0)
+        #log.info("Types: {} and {}".format(type(out_raster_array[1, 0, 0]), type(date_mask[0,0]))
+        out_raster_array[1, :, :] = np.add(out_raster_array[1, :, :], date_mask)
+        date_array = None
+        date_mask = None
+
+    '''
+    REMOVE THIS
+    # Access data cube as an array
+    data_cube = np.zero(shape = (time_steps, y, x)) #[time, y, x]
+    for index, date_image in enumerate(date_images):
+        projection = date_image.GetProjection()
+        if projection != reference_projection:
+            continue
+        data_cube[index, :, :] = date_image.GetVirtualMemArray().squeeze()
+
+    segment_length = 4
+    log.info("Finding temporal segments with at least {} subsequent changes, not counting cloud covered times".format(segment_length))
+    for y in range(np.shape(data_cube)[1]):
+        for x in range(np.shape(data_cube)[2]):
+            time_slice = data_cube[:,y,x][data_cube[:,y,x] > -1]
+            result = np.where((v == 1) & (np.roll(v,-1) == 2))[0] # work to be done here
+            if len(result) > 0:
+                print(i, result[0])
+    date_mask = np.where(data_cube > 0, 1, 0) #not right yet
+    out_raster_array[2, :, :] = np.add(out_raster_array[1, :, :], date_mask)
+    data_cube = None
+    '''
+
+    out_raster_array = None
+    out_raster = None
+    date_images = None
+    return output_product
+
 
 
 
@@ -3948,7 +4331,8 @@ def compress_tiff(in_path, out_path):
     with TemporaryDirectory(dir=os.getcwd()) as td:
         try:
             tmp_path = os.path.join(td, 'tmp_compressed.tif')
-            translateoptions = gdal.TranslateOptions(gdal.ParseCommandLine("-of GTiff -co COMPRESS=DEFLATE -co LZW -co OVERVIEWS=NONE"))
+            #translateoptions = gdal.TranslateOptions(gdal.ParseCommandLine("-of GTiff -co COMPRESS=DEFLATE -co LZW -co OVERVIEWS=NONE"))
+            translateoptions = gdal.TranslateOptions(gdal.ParseCommandLine("-of Gtiff -co COMPRESS=LZW"))
             gdal.Translate(tmp_path, in_path, options=translateoptions)
             shutil.move(tmp_path, out_path)
         except RuntimeError as e:

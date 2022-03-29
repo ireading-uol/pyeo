@@ -53,6 +53,7 @@ def rolling_detection(config_path,
                       build_prob_image=False,
                       do_classify=False,
                       do_change=False,
+                      do_dev=False,
                       do_update=False,
                       do_quicklooks=False,
                       do_delete=False,
@@ -97,6 +98,10 @@ def rolling_detection(config_path,
     log.info("---                  PROCESSING START                       ---")
     log.info("---------------------------------------------------------------")
     log.info("Options:")
+    if do_dev:
+        log.info("  --dev Running in development mode, choosing development versions of functions where available")
+    else:
+        log.info("  Running in production mode, avoiding any development versions of functions.")
     if do_all:
         log.info("  --do_all")
     if build_composite:
@@ -359,10 +364,11 @@ def rolling_detection(config_path,
                                                                 generate_date_images=True,
                                                                 missing_data_value=0)
 
-            for roots, dirs, files in os.walk(composite_dir):
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(composite_dir))
+            for root, dirs, files in os.walk(composite_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
             log.info("---------------------------------------------------------------")
             log.info("Baseline image composite is complete.")
@@ -453,7 +459,13 @@ def rolling_detection(config_path,
                 if len(drop) > 0:
                     l1c_products = l1c_products.drop(index=drop)
                 if len(add) > 0:
-                    l2a_products = l2a_products.append(add)
+                    if do_dev:
+                        l2a_products = pd.concat([l2a_products, add])
+                        #TODO: test the above fix for:
+                        # pyeo/pyeo/apps/change_detection/tile_based_change_detection_from_cover_maps.py:456: FutureWarning: The frame.append method is deprecated and will be removed from pandas in a future version. Use pandas.concat instead.
+                    else:
+                        l2a_products = l2a_products.append(add)
+
                 log.info("    {} L1C products remaining for download".format(l1c_products.shape[0]))
                 log.info("    {} L2A products remaining for download".format(l2a_products.shape[0]))
                 l2a_products = l2a_products.drop_duplicates(subset='title')
@@ -506,10 +518,11 @@ def rolling_detection(config_path,
                                                           epsg=epsg,
                                                           skip_existing=skip_existing)
 
-            for roots, dirs, files in os.walk(change_image_dir):
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(change_image_dir))
+            for root, dirs, files in os.walk(composite_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
             log.info("---------------------------------------------------------------")
             log.info("Cloud masking of change detection images is complete.")
@@ -542,10 +555,11 @@ def rolling_detection(config_path,
                                                    chunks=chunks,
                                                    skip_existing=skip_existing)
 
-            for roots, dirs, files in os.walk(categorised_image_dir):
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(categorised_image_dir))
+            for root, dirs, files in os.walk(composite_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
             log.info("---------------------------------------------------------------")
             log.info("Classification of all images is complete.")
@@ -556,6 +570,12 @@ def rolling_detection(config_path,
         # and identify all pixels with the change between groups of classes of interest.
         # Optionally applies a sieve filter to the class images.
         # ------------------------------------------------------------------------
+        #TODO: Implement the temporal pattern search here. 
+        # Class images contain 0 for clouds and missing values and a class otherwise.
+        # Sort the class images by timestamp.
+        # In pyeo.raster_manipulation.change_from_class_maps(), search for temporal pattern (number of subsequent change detections, ignore cloudy pixels)
+        # Add a third layer to the report file with the temporal paths found.
+
         if do_all or do_change:
             log.info("---------------------------------------------------------------")
             log.info("Creating change layers from stacked class images.")
@@ -619,6 +639,32 @@ def rolling_detection(config_path,
                              " dated image in your composite/ folder. Then, you need to run the --classify option.")
                 sys.exit(1)
 
+            if do_dev: # set the name of the report file in the development version run
+                before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
+                after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[0]))
+                output_product = os.path.join(probability_image_dir,
+                                              "report_{}_{}_{}.tif".format(
+                                              before_timestamp.strftime("%Y%m%dT%H%M%S"),
+                                              tile_id,
+                                              after_timestamp.strftime("%Y%m%dT%H%M%S"))
+                                              )
+                # if a report file exists, rename it to show it has been updated
+                n_report_files = len([ f for f in os.scandir(probability_image_dir) if f.is_file() \
+                                       and f.name.startswith("report_") \
+                                       and f.name.endswith(".tif")])
+
+                if n_report_files > 0:
+                    output_product_existing = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() \
+                                                and f.name.startswith("report_") \
+                                                and f.name.endswith(".tif")][0]
+                    log.info("Found existing report image product: {}".format(output_product_existing))
+                    report_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(output_product_existing))[1]
+                    if report_timestamp < after_timestamp:
+                        log.info("Report timestamp {}".format(report_timestamp.strftime("%Y%m%dT%H%M%S")))
+                        log.info(" is earlier than {}".format(after_timestamp.strftime("%Y%m%dT%H%M%S")))
+                        log.info("Updating its file name to: {}".format(output_product))
+                        os.rename(output_product_existing, output_product) 
+
             # find change patterns in the stack of classification images
             for index, image in enumerate(class_image_paths):
                 before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
@@ -632,47 +678,73 @@ def rolling_detection(config_path,
                                              after_timestamp.strftime("%Y%m%dT%H%M%S"))
                                              )
                 log.info("  Change raster file to be created: {}".format(change_raster))
-                # This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
-                # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
-                pyeo.raster_manipulation.change_from_class_maps(latest_class_composite_path,
+                if do_dev:
+                    # This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
+                    # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
+                    #TODO: In change_from_class_maps(), add a flag (e.g. -1) whether a pixel was a cloud in the later image.
+                    # Applying check whether dNDVI < -0.2, i.e. greenness has decreased over changed areas
+                    pyeo.raster_manipulation.__change_from_class_maps(latest_class_composite_path,
                                                                 image,
                                                                 change_raster, 
                                                                 change_from = from_classes,
                                                                 change_to = to_classes,
-                                                                skip_existing = skip_existing)
+                                                                report_path = output_product,
+                                                                skip_existing = skip_existing,
+                                                                old_image_dir = composite_dir,
+                                                                new_image_dir = l2_masked_image_dir,
+                                                                viband1 = 4,
+                                                                viband2 = 3,
+                                                                threshold = -0.2
+                                                                )
+                else:
+                    pyeo.raster_manipulation.change_from_class_maps(latest_class_composite_path,
+                                                                image,
+                                                                change_raster, 
+                                                                change_from = from_classes,
+                                                                change_to = to_classes,
+                                                                skip_existing = skip_existing
+                                                                )
 
-            # combine all change layers into one output raster with two layers:
-            #   (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
-            #   (2) pixels show the number of change detection dates (summed up over all change images in the folder)
-            date_image_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() and f.name.endswith(".tif") \
-                                 and "change_" in f.name ]
-            if len(date_image_paths) == 0:
-                raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
+            if do_dev:
+                #TODO: In combine_date_maps, also extract the length of consecutive detections over time.
+                #TODO: Add a third layer with the length of confirmation sequence over time.
+                #pyeo.raster_manipulation.__combine_date_maps(date_image_paths, output_product)
+                pass
+            else:
+                # combine all change layers into one output raster with two layers:
+                #   (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
+                #   (2) pixels show the number of change detection dates (summed up over all change images in the folder)
+                date_image_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() and f.name.endswith(".tif") \
+                                     and "change_" in f.name ]
+                if len(date_image_paths) == 0:
+                    raise FileNotFoundError("No class images found in {}.".format(categorised_image_dir))
 
-            before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
-            after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[-1]))
-            output_product = os.path.join(probability_image_dir,
-                                          "report_{}_{}_{}.tif".format(
-                                          before_timestamp.strftime("%Y%m%dT%H%M%S"),
-                                          tile_id,
-                                          after_timestamp.strftime("%Y%m%dT%H%M%S"))
-                                          )
-            log.info("Combining date maps: {}".format(date_image_paths))
-            pyeo.raster_manipulation.combine_date_maps(date_image_paths, output_product)
+                before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
+                after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[-1]))
+                output_product = os.path.join(probability_image_dir,
+                                              "report_{}_{}_{}.tif".format(
+                                              before_timestamp.strftime("%Y%m%dT%H%M%S"),
+                                              tile_id,
+                                              after_timestamp.strftime("%Y%m%dT%H%M%S"))
+                                              )
+                log.info("Combining date maps: {}".format(date_image_paths))
+                pyeo.raster_manipulation.combine_date_maps(date_image_paths, output_product)
             log.info("Compressing the report image: {}".format(output_product))
             pyeo.raster_manipulation.compress_tiff(output_product, output_product)
 
             log.info("Created combined raster file with two layers: {}".format(output_product))
 
-            for roots, dirs, files in os.walk(sieved_image_dir):
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(sieved_image_dir))
+            for root, dirs, files in os.walk(composite_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
-            for roots, dirs, files in os.walk(probability_image_dir):
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(sieved_image_dir))
+            for root, dirs, files in os.walk(probability_image_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(this_tiff, this_tiff)
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
             log.info("---------------------------------------------------------------")
             log.info("Change detection layers completed and output product aggregated.")
@@ -937,6 +1009,8 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--classify', dest='do_classify', action='store_true', default=False,
                         help="For each image in images/stacked, applies the classifier given in the .ini file. Saves"
                         "the outputs in output/categories.")
+    parser.add_argument('--dev', dest='do_dev', action='store_true', default=False,
+                        help="If selected, run the development version with experimental functions. Default is to run in production mode.")
     parser.add_argument('-x', '--change', dest='do_change', action='store_true', default=False,
                         help="Produces change images by post-classification cross-tabulation.")
     parser.add_argument('-p', '--build_prob_image', dest='build_prob_image', action='store_true', default=False,
