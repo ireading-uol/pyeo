@@ -460,6 +460,8 @@ def rolling_detection(config_path,
                     l1c_products = l1c_products.drop(index=drop)
                 if len(add) > 0:
                     if do_dev:
+                        add = pd.DataFrame(add)
+                        log.info("Types for concatenation: {}, {}".format(type(l2a_products), type(add)))    
                         l2a_products = pd.concat([l2a_products, add])
                         #TODO: test the above fix for:
                         # pyeo/pyeo/apps/change_detection/tile_based_change_detection_from_cover_maps.py:456: FutureWarning: The frame.append method is deprecated and will be removed from pandas in a future version. Use pandas.concat instead.

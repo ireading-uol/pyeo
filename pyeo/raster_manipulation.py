@@ -2764,16 +2764,15 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
         else:
             try:
                 l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
+                l2_name = os.path.basename(l2_path)
+                #log.info("Changing L2A path: {}".format(l2_path))
+                #log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
+                if os.path.exists(l2_path):
+                    os.rename(l2_path, os.path.join(out_directory, l2_name))
+                else:
+                    log.error("L2A path not found after atmospheric correction with Sen2Cor: {}".format(l2_path))
             except (subprocess.CalledProcessError, BadS2Exception):
                 log.error("Atmospheric correction failed for {}. Moving on to next image.".format(image))
-                pass
-            l2_name = os.path.basename(l2_path)
-            #log.info("Changing L2A path: {}".format(l2_path))
-            #log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
-            if os.path.exists(l2_path):
-                os.rename(l2_path, os.path.join(out_directory, l2_name))
-            else:
-                log.error("L2A path not found after atmospheric correction with Sen2Cor: {}".format(l2_path))
     return
 
 
