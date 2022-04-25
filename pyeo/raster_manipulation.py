@@ -135,6 +135,7 @@ import itertools as iterate
 import matplotlib.pylab as pl
 from matplotlib import cm
 from lxml import etree
+import warnings
 
 from pyeo.coordinate_manipulation import get_combined_polygon, pixel_bounds_from_polygon, write_geometry, \
     get_aoi_intersection, get_raster_bounds, align_bounds_to_whole_number, get_poly_bounding_rect, reproject_vector, \
@@ -192,11 +193,20 @@ def create_matching_dataset(in_dataset, out_path, format='GTiff', bands=1, datat
         sys.exit(1)
     if datatype is None:
         datatype = in_dataset.GetRasterBand(1).DataType
-    out_dataset = driver.Create(out_path,
-                                xsize=in_dataset.RasterXSize,
-                                ysize=in_dataset.RasterYSize,
-                                bands=bands,
-                                eType=datatype)
+    try:
+        out_dataset = driver.Create(out_path,
+                                    xsize=in_dataset.RasterXSize,
+                                    ysize=in_dataset.RasterYSize,
+                                    bands=bands,
+                                    eType=datatype,
+                                    options = ['BigTIFF=IF_NEEDED'])
+    except:
+        log.warning("GDAL option BigTIFF could not be set in create_matching_dataset. Trying without it.")
+        out_dataset = driver.Create(out_path,
+                                    xsize=in_dataset.RasterXSize,
+                                    ysize=in_dataset.RasterYSize,
+                                    bands=bands,
+                                    eType=datatype)
     out_dataset.SetGeoTransform(in_dataset.GetGeoTransform())
     out_dataset.SetProjection(in_dataset.GetProjection())
     return out_dataset
@@ -399,7 +409,7 @@ def stack_images(raster_paths, out_raster_path,
     out_raster_array[...] = nodata_value
     present_layer = 0
     for i, in_raster in enumerate(rasters):
-        log.info("  Merging raster file: {}".format(raster_paths[i]))
+        log.info("  {}".format(raster_paths[i]))
         in_raster_array = in_raster.GetVirtualMemArray()
         out_x_min, out_x_max, out_y_min, out_y_max = pixel_bounds_from_polygon(out_raster, combined_polygons)
         in_x_min, in_x_max, in_y_min, in_y_max = pixel_bounds_from_polygon(in_raster, combined_polygons)
@@ -943,7 +953,8 @@ def find_small_safe_dirs(path, threshold=600*1024*1024):
                   if os.path.isdir(os.path.join(p, d)) \
                   and (d.endswith(".SAFE") or d.endswith(".safe")) ]
     if len(dir_paths) == 0:
-         log.info("No .SAFE directories found in {}.".format(path))
+         #log.info("No .SAFE directories found in {}.".format(path))
+         return [], []
     small_dirs = []
     sizes = []
     for index, dir_path in enumerate(dir_paths):
@@ -1036,16 +1047,39 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             Raster format for GDAL
         """
 
+        log = logging.getLogger(__name__)
         in_raster = gdal.Open(in_raster_path_list[0])
         driver = gdal.GetDriverByName(str(format))
         projection = in_raster.GetProjection()
         in_gt = in_raster.GetGeoTransform()
+        n_bands = in_raster.RasterCount
         temp_band = in_raster.GetRasterBand(1)
         datatype = temp_band.DataType
         xsize = in_raster.RasterXSize
         ysize = in_raster.RasterYSize
         temp_band = None
         in_raster = None
+        # check that all input rasters have the same size
+        good_rasters = []
+        for f in in_raster_path_list:
+            in_raster = gdal.Open(f)
+            f_n_bands = in_raster.RasterCount
+            f_xsize = in_raster.RasterXSize
+            f_ysize = in_raster.RasterYSize
+            in_raster = None
+            if n_bands != f_n_bands:
+                log.error("Raster band numbers are different. Skipping {}".format(f))
+                continue
+            if xsize != f_xsize:
+                log.error("Raster x sizes are different. Skipping {}".format(f))
+                continue
+            if ysize != f_ysize:
+                log.error("Raster y sizes are different. Skipping {}".format(f))
+                continue
+            good_rasters = good_rasters + [f]
+        in_raster_path_list = good_rasters.copy()
+                
+        # determine chunk size
         chunksize = int(np.ceil(ysize / chunks))
         # create output raster file and copy metadata from first raster in the list
         result = driver.Create(out_raster_path, xsize=xsize, ysize=ysize, bands=1, eType=datatype)
@@ -1065,7 +1099,7 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
             res = [] #reset the list of arrays that will contain the band rasters
             for f in in_raster_path_list:
-                #log.info("Opening band {} from raster {}".format(band, f)) 
+                log.info("Opening band {} from raster {}".format(band, f)) 
                 ds = gdal.Open(f)
                 b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
                 if ds == None:
@@ -1081,8 +1115,14 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             if missing_data_value is not None:
                 ma = np.ma.masked_equal(stacked, missing_data_value)
                 stacked[ma.mask] = np.nan
-            median_raster = np.nanmedian(stacked, axis=-1)
-            # catch pixels where all rasters have NaN values and set them to missing_data_value
+            with warnings.catch_warnings():
+                warnings.filterwarnings('error')
+            try:
+                median_raster = np.nanmedian(stacked, axis=-1)
+            except ValueError as e:
+                log.warning("Likely all NaN slice encountered in chunk processing: {}".format(e))
+                median_raster = np.full_like(stacked[:,:,0], missing_data_value)
+            # catch pixels where all raster layers have NaN values and set them to missing_data_value
             all_nan_locations = np.isnan(stacked).all(axis=-1)
             median_raster[all_nan_locations] = missing_data_value
             b = result.GetRasterBand(1).ReadAsArray()
@@ -1094,43 +1134,39 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
         res = None
         b = None
         median_raster = None
-
-    log = logging.getLogger(__name__)
-    driver = gdal.GetDriverByName(str(format))
-    in_raster_list = [gdal.Open(raster) for raster in in_raster_path_list]
-    projection = in_raster_list[0].GetProjection()
-    in_gt = in_raster_list[0].GetGeoTransform()
-    x_res = in_gt[1]
-    y_res = in_gt[5] * -1
-    n_bands = in_raster_list[0].RasterCount
-    temp_band = in_raster_list[0].GetRasterBand(1)
-    datatype = temp_band.DataType
-    temp_band = None
-    # Creating output image + array
+        return
+    
+    in_raster = gdal.Open(in_raster_path_list[0])
+    n_bands = in_raster.RasterCount
+    in_raster = None
     log.info("-------------------------------------------------")
     log.info("Creating median composite at {}".format(composite_out_path))
+    log.info("-------------------------------------------------")
     log.info("Using {} input raster files:".format(len(in_raster_path_list)))
     for i in in_raster_path_list:
         log.info("   {}".format(i))
     # use raster stacking to calculate the median over all masked raster files and all 4 bands
-    tmpfiles = []
-    for band in range(n_bands):
-        log.info('Band {} - calculating median composite across all images using raster stacking'.format(band+1))
-        log.info('   Ignoring missing data value of {}'.format(missing_data_value))
-        tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
-        tmpfiles.append(tmpfile)
-        median_of_raster_list(in_raster_path_list, tmpfile, band=band+1, chunks=chunks, missing_data_value=missing_data_value)
-        # log some image stats
-        get_stats_from_raster_file(tmpfile)
-    log.info('Finished median calculations.')
-
-    # Aggretating band composites into a single tiff file
-    log.info('Aggretating band composites into a single raster file.')
-    stack_images(tmpfiles, composite_out_path, geometry_mode="intersect")
-    get_stats_from_raster_file(composite_out_path)
-    for tmpfile in tmpfiles:
-        os.remove(tmpfile)
+    with TemporaryDirectory(dir=os.getcwd()) as td:
+        tmpfiles = []
+        for band in range(n_bands):
+            log.info('Band {} - calculating median composite across all images using raster stacking'.format(band+1))
+            log.info('   Ignoring missing data value of {}'.format(missing_data_value))
+            tmpfile = os.path.join(td, os.path.basename('tmp_' + \
+                                   composite_out_path).split('.')[0] + '_band' + \
+                                   str(band+1) + '.tif')
+            #tmpfile = os.path.abspath(composite_out_path.split('.')[0] + '_tmp_band' + str(band+1) + '.tif')
+            tmpfiles.append(tmpfile)
+            median_of_raster_list(in_raster_path_list, tmpfile, band=band+1, chunks=chunks, missing_data_value=missing_data_value)
+            # log some image stats
+            get_stats_from_raster_file(tmpfile)
+        log.info('Finished median calculations.')
+        # Aggretating band composites into a single tiff file
+        log.info('Aggretating band composites into a single raster file.')
+        stack_images(tmpfiles, composite_out_path, geometry_mode="intersect")
+        get_stats_from_raster_file(composite_out_path)
+    log.info("-------------------------------------------------")
     log.info("Median composite done")
+    log.info("-------------------------------------------------")
     return composite_out_path
 
 
@@ -1231,14 +1267,14 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             stacked = np.dstack(res)
             if missing_data_value is not None:
                 ma = np.ma.masked_equal(stacked, missing_data_value)
-                stacked[ma.mask] = nan
+                stacked[ma.mask] = np.nan
             median_raster = np.nanmedian(stacked, axis=-1)
             # catch pixels where all rasters have NaN values and set them to missing_data_value
             all_nan_locations = np.isnan(stacked).all(axis=-1)
             median_raster[all_nan_locations] = missing_data_value
             b = result.GetRasterBand(1).ReadAsArray()
-            log.info("Broadcasting from [{}:{}, {}:{}]".format(0, median_raster.shape[0], 0, median_raster.shape[1]))
-            log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
+            #log.info("Broadcasting from [{}:{}, {}:{}]".format(0, median_raster.shape[0], 0, median_raster.shape[1]))
+            #log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
             b[yoff:(yoff+ys), xoff:(xoff+xs)] = median_raster
             result.GetRasterBand(1).WriteArray(b)
         result = None    
@@ -1283,8 +1319,8 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             log.info("Output file {} already exists, skipping the masking step.".format(masked_image_path))
         else:    
             log.info('Producing cloud-masked image file: {}'.format(masked_image_path))
-            log.info('   from mask: {}'.format(mask_paths[i]))
-            log.info('   and raster: {}'.format(in_raster))
+            #log.info('   from mask: {}'.format(mask_paths[i]))
+            #log.info('   and raster: {}'.format(in_raster))
             apply_mask_to_image(mask_paths[i], in_raster, masked_image_path)
             # log some image stats
             get_stats_from_raster_file(in_raster)
@@ -1371,14 +1407,16 @@ def reproject_image(in_raster, out_raster_path, new_projection,  driver = "GTiff
     """
     log = logging.getLogger(__name__)
 
+    log.info("Reprojecting {}".format(in_raster))
     if type(new_projection) is int:
         proj = osr.SpatialReference()
         proj.ImportFromEPSG(new_projection)
         new_projection = proj.ExportToWkt()
-        epsg = proj.GetAttrValue('AUTHORITY',1)
-        log.info("Reprojecting {} to EPSG code {}".format(in_raster, epsg))
+        #epsg = proj.GetAttrValue('AUTHORITY',1)
+        #log.info("Reprojecting {} to EPSG code {}".format(in_raster, epsg))
     else:
-        log.info("Reprojecting {} to {}".format(in_raster, new_projection))
+        pass
+        #log.info("Reprojecting {} to {}".format(in_raster, new_projection))
     if type(in_raster) is str:
         in_raster = gdal.Open(in_raster)
     res = in_raster.GetGeoTransform()[1]
@@ -1783,7 +1821,7 @@ def resample_image_in_place(image_path, new_res):
         image = None
         return
     image = None
-    log.info("Resampling to {}m resolution: {}".format(new_res, image_path))
+    #log.info("Resampling to {}m resolution: {}".format(new_res, image_path))
     with TemporaryDirectory(dir=os.getcwd()) as td:
         # Remember this is used for masks, so any averaging resample strat will cock things up.
         args = gdal.WarpOptions(
@@ -2618,8 +2656,8 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
     # approach can be multithreaded in future to process multiple image (1 per core) but that
     # will take some work to make sure they all finish before the program moves on.
     # added sen2cor_path by hb91
-    gipp_path = os.path.join(os.path.dirname(__file__), "L2A_GIPP.xml")
-    out_dir = os.path.dirname(image_path)
+    #gipp_path = os.path.join(os.path.dirname(__file__), "L2A_GIPP.xml")
+    #out_dir = os.path.dirname(image_path)
     now_time = datetime.datetime.now()   # I can't think of a better way of getting the new outpath from sen2cor
     timestamp = now_time.strftime(r"%Y%m%dT%H%M%S")
     version = get_sen2cor_version(sen2cor_path)
@@ -2744,7 +2782,7 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
               if image.startswith('MSIL1C', 4)]
     # Opportunity for multithreading here
     for image in images:
-        log.info("Atmospheric correction of {}".format(image))
+        #log.info("Atmospheric correction of {}".format(image))
         #log.info("   sen2cor path = " + sen2cor_path)
         image_path = os.path.join(in_directory, image)
         #log.info("   image path = " + image_path)
@@ -2759,9 +2797,10 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
         out_glob = out_path.rpartition("_")[0] + "*"
         #log.info("   out glob = " + out_glob)
         if glob.glob(out_glob):
-            log.info("  Skipping atmospheric correction. File exists at {}".format(out_path))
+            log.info("Skipping atmospheric correction of {}. Already done.".format(image))
             continue
         else:
+            log.info("Atmospheric correction of {}".format(image))
             try:
                 l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
                 l2_name = os.path.basename(l2_path)
@@ -2800,7 +2839,8 @@ def create_mask_from_model(image_path, model_path, model_clear=0, num_chunks=10,
         The path to the new mask
 
     """
-    from pyeo.classification import classify_image  # Deferred import to deal with circular reference
+    #TODO: Fix this properly. Deferred import to deal with circular reference
+    from pyeo.classification import classify_image  
     with TemporaryDirectory(dir=os.getcwd()) as td:
         #log.info("Making temp dir {}".format(td))
         log = logging.getLogger(__name__)
@@ -3128,7 +3168,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         Paths to a classification map with a newer acquisition date.
 
     change_raster : str
-        Path to the output raster file that will be created.
+        Path to the output raster file that will be created. Will be updated with the latest time stamp.
 
     change_from : list of int
         List of integers with the class codes to be used as 'from' in the change detection.
@@ -3213,13 +3253,10 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             change_array[np.where(added_mask_array != 2)] = 0
             # set clouds and missing values in latest class image to -1 in the change layer
             change_array[np.where(new_class_array == 0)] = -1
-
-            #TODO: *** add         vi = (viband1 - viband2) / (viband1 + viband2) < threshold
             if viband1 is not None and viband2 is not None and threshold is not None:
                 log.info("Confirming detected class transitions based on vegetation index differencing.")
                 log.info("  VI = (band{} - band{}) / (band{} - band{})".format(viband1, viband2, viband1, viband2))
                 log.info("  confirming changes if VI_new - VI_old < {}".format(threshold))
-
                 # get composite file name and find bands in composite
                 old_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(old_class_path))
                 old_image_path = [ f.name for f in os.scandir(old_image_dir) if f.is_file() \
@@ -3228,35 +3265,28 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
                                               and f.name.endswith(".tif")][0]
                 if len(old_image_path) > 0:
                     log.info("Found old satellite image: {}".format(old_image_path))
-    
                     # open file and read bands
                     old_image = gdal.Open(os.path.join(old_image_dir, old_image_path), gdal.GA_ReadOnly)
                     old_image_array = old_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
-
                     # calculate composite VI (N.B. -1 because array starts numbering with 0 and GDAL numbers bands from 1
                     with np.errstate(divide='ignore', invalid='ignore'):
                         vi_old = np.true_divide((1.0 * old_image_array[viband1-1,:,:] - 1.0 * old_image_array[viband2-1,:,:]),
                                                 (1.0 * old_image_array[viband1-1,:,:] + 1.0 * old_image_array[viband2-1,:,:]))
                         vi_old[vi_old == np.inf] = 0
                         vi_old = np.nan_to_num(vi_old)
-
                     old_image_array = None
                     old_image = None
-
                     # get change image file name and find bands in change image
                     new_timestamp = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
                     new_image_path = [ f.name for f in os.scandir(new_image_dir) if f.is_file() \
                                                   and f.name.startswith("S2") \
                                                   and new_timestamp.strftime("%Y%m%dT%H%M%S") in f.name \
                                                   and f.name.endswith(".tif")][0]
-
                     if len(new_image_path) > 0:
                         log.info("Found new satellite image: {}".format(new_image_path))
-
                         # open file and read bands
                         new_image = gdal.Open(os.path.join(new_image_dir, new_image_path), gdal.GA_ReadOnly)
                         new_image_array = new_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
-
                         # calculate change image VI
                         with np.errstate(divide='ignore', invalid='ignore'):
                             vi_new = np.true_divide((1.0 * new_image_array[viband1-1,:,:] - 1.0 * new_image_array[viband2-1,:,:]),
@@ -3265,25 +3295,19 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
                             vi_new = np.nan_to_num(vi_new)
                         new_image_array = None
                         new_image = None
-
                         # calculate dVI = new minus old VI
                         dvi = vi_new - vi_old
                         vi_new = None 
                         vi_old = None
- 
                         # set all values where the VI difference exceeds the threshold to zero (no change)
                         change_array[np.where(dvi >= threshold)] = 0
                         dvi = None
-
                     else:
                         log.error("Did not find a new satellite image with name pattern: {}".format(new_timestamp.strftime("%Y%m%dT%H%M%S")))
                         log.error("Skipping vegetation index calculation and confirmation of change detections.")
-
                 else:
                     log.error("Did not find an old satellite image with name pattern: {}".format(old_timestamp.strftime("%Y%m%dT%H%M%S")))
                     log.error("Skipping vegetation index calculation and confirmation of change detections.")
-
-
             # save change layer
             new_class_array = None
             new_class_image = None
@@ -3293,10 +3317,9 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             change_image = None
         else:
             log.info("Change raster file already exists: {}. Skipping change raster creation.".format(change_raster))
-
-        #TODO: *** within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
-
+        # within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
         # ensure that the date of the new change layer is AFTER the report file was last updated
+        baseline_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[0]
         report_last_updated_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[1]
         new_changes_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(change_raster))[1]
         # pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
@@ -3314,7 +3337,18 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             log.info("  last updated: {}".format(report_last_updated_timestamp))
             log.info("  change image:  {}".format(change_raster))
             log.info("  updated:      {}".format(new_changes_timestamp))
-        # now update the report file layers
+        #TODO: update name of report_path with new_changes_timestamp
+        tile_id = os.path.basename(report_path).split("_")[2]
+        old_report_path = report_path
+        report_path = os.path.join(os.path.dirname(report_path),
+                                       "report_{}_{}_{}.tif".format(
+                                       baseline_timestamp.strftime("%Y%m%dT%H%M%S"),
+                                       tile_id,
+                                       report_last_updated_timestamp.strftime("%Y%m%dT%H%M%S"))
+                                       )
+        shutil.move(old_report_path, report_path)
+        
+        #now update the report file layers
         change_image = gdal.Open(change_raster, gdal.GA_ReadOnly)
         change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
         report_image = gdal.Open(report_path, gdal.GA_Update)
@@ -3334,32 +3368,24 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         # where layer 0 is zero and the change array contains a value > 0, it will be burned into the report layer 0
         locs = ( (out_report_array[0, :, :] == 0) & (change_array > 0) )
         out_report_array[0, locs] = change_array[locs]
-        
         # layer 1 contains an additive map of the number of positive change detections
         log.info("layer 1 contains an additive map of the number of positive change detections")
         locs = ( change_array > 0 )
         out_report_array[1, locs] = out_report_array[1, locs] + 1
-
         # layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and 
         #   decreasing the counter whenever no change is detected, i.e. change array == 0
         log.info("layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and") 
         log.info("   decreasing the counter whenever no change is detected, i.e. change array == 0")
         # increase counter if a change was detected
-        log.info("   - increase counter if a change was detected")
         locs = ( change_array > 0 )
         out_report_array[2, locs] = out_report_array[2, locs] + 1
         # reset the counter if no change was detected
-        log.info("   - decrease the counter if no change was detected")
         locs = ( change_array == 0 )
         out_report_array[2, locs] = out_report_array[2, locs] - 1
-
-        log.info("   - save and close the file")
         change_array = None
         change_image = None
         out_report_array = None
         report_image = None
-        log.info("   - return from the function")
-
     return change_raster
 
 
@@ -3726,7 +3752,7 @@ def buffer_mask_in_place(mask_path, buffer_size, cache=None):
 
     """
     log = logging.getLogger(__name__)
-    log.info("Buffering {} with buffer size {}".format(mask_path, buffer_size))
+    #log.info("Buffering {} with buffer size {}".format(mask_path, buffer_size))
     mask = gdal.Open(mask_path, gdal.GA_Update)
     mask_array = mask.GetVirtualMemArray(eAccess=gdal.GA_Update)
     if buffer_size > 10:
@@ -3929,12 +3955,11 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
             image = None
             image = gdal.Open(tmpfile_path, gdal.GA_Update)
         except RuntimeError as e:
-            log.error("Error opening raster file: {}".format(in_raster_path))
-            log.error("  {}".format(e))
+            log.error("Error opening raster file: {}    /   {}".format(in_raster_path, e))
             return
     #TODO: check data type of the in_raster - currently crashes when looking at images from the probabilities folder (wrong data type)
     if image.RasterCount < 3:
-        log.info("Raster count is {}. Using band 1.".format(image.RasterCount))
+        #log.info("Raster count is {}. Using band 1.".format(image.RasterCount))
         bands=[image.RasterCount]
         alg = 'nearest'
         palette = "rgba"
@@ -3948,7 +3973,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         output_type = gdal.GDT_Byte
         if scale_factors is None:
             scale_factors = [[0,2000,0,255]] # this is specific to Sentinel-2
-        log.info("Scaling values from {}...{} to {}...{}".format(scale_factors[0][0], scale_factors[0][1], scale_factors[0][2], scale_factors[0][3]))
+        #log.info("Scaling values from {}...{} to {}...{}".format(scale_factors[0][0], scale_factors[0][1], scale_factors[0][2], scale_factors[0][3]))
 
     # All the options that gdal.Translate() takes are listed here: gdal.org/python/osgeo.gdal-module.html#TranslateOptions
     kwargs = {
@@ -3965,10 +3990,10 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
 
     if image.RasterCount < 3:
         try:
-            histo = np.array(band.GetHistogram())
-            log.info("Histogram: {}".format(np.where(histo > 0)[0]))
-            log.info("           {}".format(histo[np.where(histo > 0)]))
-            log.info("Band data min, max: {}, {}".format(data.min(), data.max()))
+            #histo = np.array(band.GetHistogram())
+            #log.info("Histogram: {}".format(np.where(histo > 0)[0]))
+            #log.info("           {}".format(histo[np.where(histo > 0)]))
+            #log.info("Band data min, max: {}, {}".format(data.min(), data.max()))
             colors = gdal.ColorTable()
             #TODO: load a colour table (QGIS style file) from file if specified as an option by the function call
             '''
@@ -4000,7 +4025,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
                 colors.SetColorEntry(11, (46, 139, 87, 255)) # Open Woodland
                 colors.SetColorEntry(12, (92, 145, 92, 255)) # Toby's Woodland
             else:
-                log.info("Using viridis colour table for {} classes".format(data.max()))
+                #log.info("Using viridis colour table for {} classes".format(data.max()))
                 viridis = cm.get_cmap('viridis', min(data.max(), 255))
                 for index, color in enumerate(viridis.colors):
                     colors.SetColorEntry(index, (int(color[0]*255), int(color[1]*255), int(color[2]*255), int(color[3]*255)))
@@ -4015,7 +4040,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
             band = None
         except Exception as e: 
             log.error("An error occurred: {}".format(e)) 
-            log.info("  Skipping quicklook for image: {}".format(out_raster_path)) 
+            log.error("  Skipping quicklook for image: {}".format(out_raster_path)) 
             image = None
             return
     else:

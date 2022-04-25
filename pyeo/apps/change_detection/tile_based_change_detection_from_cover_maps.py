@@ -25,20 +25,21 @@ import pyeo.classification
 import pyeo.queries_and_downloads
 import pyeo.raster_manipulation
 import pyeo.filesystem_utilities
-from pyeo.filesystem_utilities import get_filenames
+#from pyeo.filesystem_utilities import get_filenames
 
 
 import configparser
-import copy
+#import copy
 import argparse
-import glob
+#import glob
 import json
 import numpy as np
 import os
 from osgeo import gdal
 import pandas as pd
 import datetime as dt
-from tempfile import TemporaryDirectory
+import zipfile
+#from tempfile import TemporaryDirectory
 
 gdal.UseExceptions()
 
@@ -61,9 +62,57 @@ def rolling_detection(config_path,
                       skip_existing=False
                       ):
 
+    def zip_contents(directory, notstartswith=None):
+        paths = [f for f in os.listdir(directory) if not f.endswith(".zip")]
+        for f in paths:
+            do_it = True
+            if notstartswith is not None:
+                for i in notstartswith:
+                    if f.startswith(i):
+                        do_it = False
+                        log.info('Skipping file that starts with \'{}\':   {}'.format(i,f))
+            if do_it:
+                file_to_zip = os.path.join(directory, f)
+                zipped_file = file_to_zip.split(".")[0]
+                log.info('Zipping   {}'.format(file_to_zip))
+                if os.path.isdir(file_to_zip):
+                    shutil.make_archive(zipped_file, 'zip', file_to_zip)
+                else:
+                    with zipfile.ZipFile(zipped_file+".zip", "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                        zf.write(file_to_zip, os.path.basename(file_to_zip))
+                if (os.path.exists(zipped_file+".zip")):
+                    if os.path.isdir(file_to_zip):
+                        shutil.rmtree(file_to_zip)
+                    else:
+                        os.remove(file_to_zip)                            
+                else:
+                    log.error("Zipping failed: {}".format(zipped_file+".zip")) 
+        return
+
+    def unzip_contents(zippath, ifstartswith=None, ending=None):
+        dirpath = zippath[:-4] # cut away the  .zip ending
+        if ifstartswith is not None and ending is not None:
+            if dirpath.startswith(ifstartswith):
+                dirpath = dirpath + ending
+        log.info("Unzipping {}".format(zippath))
+        if not os.path.exists(dirpath):
+            os.makedirs(dirpath)
+        if os.path.exists(dirpath):            
+            if os.path.exists(zippath):
+                shutil.unpack_archive(
+                    filename=zippath,
+                    extract_dir=dirpath,
+                    format='zip'
+                   )
+                os.remove(zippath)
+        else:
+            log.error("Unzipping failed")
+        return
+
+
     # If any processing step args are present, do not assume that we want to do all steps
     do_all = True
-    if (build_composite or do_download or do_classify or do_change or do_update or do_delete or do_quicklooks) == True:
+    if (build_composite or do_download or do_classify or do_change or do_update or do_delete or do_zip or do_quicklooks) == True:
         do_all = False
     conf = configparser.ConfigParser(allow_no_value=True)
     conf.read(config_path)
@@ -95,7 +144,7 @@ def rolling_detection(config_path,
     pyeo.filesystem_utilities.create_folder_structure_for_tiles(tile_root_dir)
     log = pyeo.filesystem_utilities.init_log(os.path.join(tile_root_dir, "log", tile_id+"_log.txt"))
     log.info("---------------------------------------------------------------")
-    log.info("---                  PROCESSING START                       ---")
+    log.info("---   PROCESSING START: {}   ---".format(tile_root_dir))
     log.info("---------------------------------------------------------------")
     log.info("Options:")
     if do_dev:
@@ -109,7 +158,8 @@ def rolling_detection(config_path,
         log.info("  --download_source = {}".format(download_source))
     if do_download:
         log.info("  --download for change detection images")
-        log.info("  --download_source = {}".format(download_source))
+        if not build_composite:
+            log.info("  --download_source = {}".format(download_source))
     if do_classify:
         log.info("  --classify to apply the random forest model and create classification layers")
     if build_prob_image:
@@ -121,9 +171,14 @@ def rolling_detection(config_path,
     if do_quicklooks:
         log.info("  --quicklooks to create image quicklooks")
     if do_delete:
-        log.info("  --remove all downloaded and intermediate image files after use. WARNING! IRREVERSIBLE FILE LOSS!")
+        log.info("  --remove downloaded L1C images and intermediate image products")
+        log.info("           (cloud-masked band-stacked rasters, class images, change layers) after use.")
+        log.info("           Deletes remaining temporary directories starting with \'tmp\' from interrupted processing runs.")
+        log.info("           Keeps only L2A images, composites and report files.")
+        log.info("           Overrides --zip for the above files. WARNING! FILE LOSS!")
     if do_zip:
-        log.info("  --zip to archive the downloaded L1C, L2A, cloud-masked and intermediate images after use")
+        log.info("  --zip archives L2A images, and if --remove is not selected also L1C,")
+        log.info("           cloud-masked band-stacked rasters, class images and change layers after use.")
 
     log.info("List of image bands: {}".format(bands))
     log.info("Model used: {}".format(model_path))
@@ -150,12 +205,10 @@ def rolling_detection(config_path,
         quicklook_dir = os.path.join(tile_root_dir, r"output/quicklooks")
 
         if arg_start_date == "LATEST":
-            # Returns the yyyymmdd string of the latest classified image
-            start_date = pyeo.filesystem_utilities.get_image_acquisition_time(
-                pyeo.filesystem_utilities.sort_by_timestamp(
-                    [image_name for image_name in os.listdir(categorised_image_dir) if image_name.endswith(".tif")],
-                    recent_first=True
-                )[0]).strftime("%Y%m%d")
+            report_file_name = [f for f in os.listdir(probability_image_dir) if os.path.isfile(f) and f.startswith("report_") and f.endswith(".tif")][0]
+            report_file_path = os.path.join(probability_image_dir, report_file_name)
+            after_timestamp  = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_file_path))[-1]
+            after_timestamp.strftime("%Y%m%d") # Returns the yyyymmdd string of the acquisition date from which the latest classified image was derived
         elif arg_start_date:
             start_date = arg_start_date
 
@@ -260,18 +313,26 @@ def rolling_detection(config_path,
                 log.info("    {} L2A products".format(l2a_products.shape[0]))
             df = None
 
-            #TODO: Before the next step, search the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes
-            # Remove those already obtained from the list
-
+            # Before the next step, search the composite/L2A and L1C directories whether the scenes have already been downloaded and/or processed and check their dir sizes
             if l1c_products.shape[0] > 0:
-                log.info("Checking for availability of L2A products to minimise download and atmospheric correction of L1C products.")
+                log.info("Checking for already downloaded and zipped L1C or L2A products and")
+                log.info("  availability of matching L2A products for download.")
                 n = len(l1c_products)
                 drop=[]
                 add=[]
                 for r in range(n):
                     id = l1c_products.iloc[r,:]['title']
+                    search_term = id.split("_")[2]+"_"+id.split("_")[3]+"_"+id.split("_")[4]+"_"+id.split("_")[5]
+                    log.info("Searching locally for file names containing: {}.".format(search_term))
+                    file_list = [os.path.join(composite_l1_image_dir, f) for f in os.listdir(composite_l1_image_dir)] + \
+                        [os.path.join(composite_l2_image_dir, f) for f in os.listdir(composite_l2_image_dir)] + \
+                        [os.path.join(composite_l2_masked_image_dir, f) for f in os.listdir(composite_l2_masked_image_dir)]
+                    for f in file_list:
+                        if search_term in f:
+                            log.info("  Product already downloaded: {}".format(f))
+                            drop.append(l1c_products.index[r])
                     search_term = "*"+id.split("_")[2]+"_"+id.split("_")[3]+"_"+id.split("_")[4]+"_"+id.split("_")[5]+"*"
-                    log.info("Search term: {}.".format(search_term))
+                    log.info("Searching on the data hub for files containing: {}.".format(search_term))
                     matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user, 
                                                                                        passwd=sen_pass, 
                                                                                        start_date=composite_start_date,
@@ -288,7 +349,8 @@ def rolling_detection(config_path,
                         drop.append(l1c_products.index[r])
                         add.append(matching_l2a_products_df.iloc[0,:])
                     if len(matching_l2a_products_df) == 0:
-                        log.info("Found no match for L1C: {}.".format(id))
+                        #log.info("Found no match for L1C: {}.".format(id))
+                        pass
                     if len(matching_l2a_products_df) > 1:
                         # check granule sizes on the server
                         matching_l2a_products_df['size'] = matching_l2a_products_df['size'].str.split(' ').apply(lambda x: float(x[0]) * {'GB': 1e3, 'MB': 1, 'KB': 1e-3}[x[1]])
@@ -308,13 +370,14 @@ def rolling_detection(config_path,
 
                 log.info("Downloading Sentinel-2 L1C products.")
                 #TODO: Need to collect the response from download_from_scihub function and check whether the download succeeded
-                pyeo.queries_and_downloads.download_s2_data_from_df(l1c_products,
-                                                            composite_l1_image_dir, 
-                                                            composite_l2_image_dir, 
-                                                            download_source,
-                                                            user=sen_user, 
-                                                            passwd=sen_pass, 
-                                                            try_scihub_on_fail=True)
+                if l1c_products.shape[0] > 0:
+                    pyeo.queries_and_downloads.download_s2_data_from_df(l1c_products,
+                                                                        composite_l1_image_dir, 
+                                                                        composite_l2_image_dir, 
+                                                                        download_source,
+                                                                        user=sen_user, 
+                                                                        passwd=sen_pass, 
+                                                                        try_scihub_on_fail=True)
                 log.info("Atmospheric correction with sen2cor.")
                 pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, 
                                                                 composite_l2_image_dir,
@@ -342,37 +405,192 @@ def rolling_detection(config_path,
             log.info("Image download and atmospheric correction for composite is complete.")
             log.info("---------------------------------------------------------------")
 
-            #l2a_paths = [ f.path for f in os.scandir(composite_l2_image_dir) if f.is_dir() ]
-            #raster_paths = pyeo.filesystem_utilities.get_raster_paths(l2a_paths, filepatterns=bands, dirpattern=resolution) # don't really need to know these
-            #scl_raster_paths = pyeo.filesystem_utilities.get_raster_paths(l2a_paths, filepatterns=["SCL"], dirpattern="20m") # don't really need to know these
+            if do_delete:   
+                log.info("---------------------------------------------------------------")
+                log.info("Deleting downloaded L1C images for composite, keeping only derived L2A products")
+                log.info("---------------------------------------------------------------")
+                directory = composite_l1_image_dir
+                log.info('Deleting {}'.format(directory))
+                shutil.rmtree(directory)
+                log.info("---------------------------------------------------------------")
+                log.info("Deletion of L1C images complete. Keeping only L2A images.")
+                log.info("---------------------------------------------------------------")
+            else:
+                if do_zip:
+                    log.info("---------------------------------------------------------------")
+                    log.info("Zipping downloaded L1C images for composite after atmospheric correction")
+                    log.info("---------------------------------------------------------------")
+                    zip_contents(composite_l1_image_dir)
+                    log.info("---------------------------------------------------------------")
+                    log.info("Zipping complete")
+                    log.info("---------------------------------------------------------------")
 
+            log.info("---------------------------------------------------------------")
             log.info("Applying simple cloud, cloud shadow and haze mask based on SCL files and stacking the masked band raster files.")
-            pyeo.raster_manipulation.apply_scl_cloud_mask(composite_l2_image_dir,
-                                                          composite_l2_masked_image_dir, 
-                                                          scl_classes=[0,1,2,3,8,9,10,11],
-                                                          buffer_size=buffer_size_composite, 
-                                                          bands=bands, 
-                                                          out_resolution=out_resolution,
-                                                          haze=None,
-                                                          epsg=epsg,
-                                                          skip_existing=skip_existing)
+            log.info("---------------------------------------------------------------")
 
+            # Compare the time stamps of all .tif files in the composite_l2_masked_dir
+            #   with the .SAFE directory time stamps in the composite_l2_dir, and
+            #   the .zip files in the same directory
+            #   Unzip files that have not been processed to cloud-masked yet
+
+            directory = composite_l2_masked_image_dir
+            masked_file_paths = [f for f in os.listdir(directory) if f.endswith(".tif") \
+                                 and os.path.isfile(os.path.join(directory, f))]
+
+            directory = composite_l2_image_dir
+            l2a_zip_file_paths = [f for f in os.listdir(directory) if f.endswith(".zip")]
+
+            if len(l2a_zip_file_paths) > 0:
+                for f in l2a_zip_file_paths:
+                    # check whether the zipped file has already been cloud masked
+                    zip_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(f)).strftime("%Y%m%dT%H%M%S")
+                    if any(zip_timestamp in f for f in masked_file_paths):
+                        continue
+                    else:
+                        # extract it if not
+                        unzip_contents(os.path.join(composite_l2_image_dir, f),
+                                       ifstartswith="S2", ending=".SAFE")
+                        
+            directory = composite_l2_image_dir
+            l2a_safe_file_paths = [f for f in os.listdir(directory) if f.endswith(".SAFE") \
+                                   and os.path.isdir(os.path.join(directory, f))]
+            
+            files_for_cloud_masking = []
+            if len(l2a_safe_file_paths) > 0:
+                for f in l2a_safe_file_paths:
+                    # check whether the L2A SAFE file has already been cloud masked
+                    safe_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(f)).strftime("%Y%m%dT%H%M%S")
+                    if any(safe_timestamp in f for f in masked_file_paths):
+                        continue
+                    else:
+                        # add it to the list of files to do if it has not been cloud masked yet
+                        files_for_cloud_masking = files_for_cloud_masking + [f]
+                    
+            if len(files_for_cloud_masking) == 0:
+                log.info("No L2A images found for cloud masking. They may already have been done.")
+            else:
+                pyeo.raster_manipulation.apply_scl_cloud_mask(composite_l2_image_dir,
+                                                              composite_l2_masked_image_dir, 
+                                                              scl_classes=[0,1,2,3,8,9,10,11],
+                                                              buffer_size=buffer_size_composite, 
+                                                              bands=bands, 
+                                                              out_resolution=out_resolution,
+                                                              haze=None,
+                                                              epsg=epsg,
+                                                              skip_existing=skip_existing)
+
+            if do_quicklooks or do_all:
+                log.info("---------------------------------------------------------------")
+                log.info("Producing quicklooks.")
+                log.info("---------------------------------------------------------------")
+                dirs_for_quicklooks = [composite_l2_masked_image_dir]
+                for main_dir in dirs_for_quicklooks: 
+                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                    #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
+                    if len(files) == 0:
+                        log.warning("No images found in {}.".format(main_dir))
+                    else:    
+                        for f in files:
+                            quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
+                            log.info("Creating quicklook: {}".format(quicklook_path))
+                            pyeo.raster_manipulation.create_quicklook(f, 
+                                                                      quicklook_path,
+                                                                      width=512, 
+                                                                      height=512, 
+                                                                      format="PNG", 
+                                                                      bands=[3,2,1],
+                                                                      scale_factors=[[0,2000,0,255]]
+                                                                      )
+            log.info("Quicklooks complete.")
+
+            if do_zip:
+                log.info("---------------------------------------------------------------")
+                log.info("Zipping downloaded L2A images for composite after cloud masking and band stacking")
+                log.info("---------------------------------------------------------------")
+                zip_contents(composite_l2_image_dir)
+                log.info("---------------------------------------------------------------")
+                log.info("Zipping complete")
+                log.info("---------------------------------------------------------------")
+
+            log.info("---------------------------------------------------------------")
             log.info("Building initial cloud-free median composite from directory {}".format(composite_l2_masked_image_dir))
-            pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir, 
-                                                                composite_dir, 
-                                                                chunks=chunks,
-                                                                generate_date_images=True,
-                                                                missing_data_value=0)
-
-            log.info("Compressing tiff files in directory {} and all subdirectories".format(composite_dir))
-            for root, dirs, files in os.walk(composite_dir):
-                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
-                for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
-
             log.info("---------------------------------------------------------------")
-            log.info("Baseline image composite is complete.")
-            log.info("---------------------------------------------------------------")
+            directory = composite_l2_masked_image_dir
+            masked_file_paths = [f for f in os.listdir(directory) if f.endswith(".tif") \
+                                 and os.path.isfile(os.path.join(directory, f))]
+
+            if len(masked_file_paths) > 0:
+                pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir, 
+                                                                    composite_dir, 
+                                                                    chunks=chunks,
+                                                                    generate_date_images=True,
+                                                                    missing_data_value=0)
+                log.info("---------------------------------------------------------------")
+                log.info("Baseline composite complete.")
+                log.info("---------------------------------------------------------------")
+               
+                if do_quicklooks or do_all:
+                    log.info("---------------------------------------------------------------")
+                    log.info("Producing quicklooks.")
+                    log.info("---------------------------------------------------------------")
+                    dirs_for_quicklooks = [composite_dir]
+                    for main_dir in dirs_for_quicklooks: 
+                        files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                        #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
+                        if len(files) == 0:
+                            log.warning("No images found in {}.".format(main_dir))
+                        else:    
+                            for f in files:
+                                quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
+                                log.info("Creating quicklook: {}".format(quicklook_path))
+                                pyeo.raster_manipulation.create_quicklook(f, 
+                                                                          quicklook_path,
+                                                                          width=512, 
+                                                                          height=512, 
+                                                                          format="PNG", 
+                                                                          bands=[3,2,1],
+                                                                          scale_factors=[[0,2000,0,255]]
+                                                                          )
+                    log.info("Quicklooks complete.")
+
+                if do_delete:
+                    log.info("---------------------------------------------------------------")
+                    log.info("Deleting intermediate cloud-masked L2A images used for the baseline composite")
+                    log.info("---------------------------------------------------------------")
+                    f = composite_l2_masked_image_dir
+                    log.info('Deleting {}'.format(f))
+                    shutil.rmtree(f)
+                    log.info("---------------------------------------------------------------")
+                    log.info("Intermediate file products have been deleted.")
+                    log.info("They can be reprocessed from the downloaded L2A images.")
+                    log.info("---------------------------------------------------------------")
+                else:
+                    if do_zip:
+                        log.info("---------------------------------------------------------------")
+                        log.info("Zipping cloud-masked L2A images used for the baseline composite")
+                        log.info("---------------------------------------------------------------")
+                        zip_contents(composite_l2_masked_image_dir)
+                        log.info("---------------------------------------------------------------")
+                        log.info("Zipping complete")
+                        log.info("---------------------------------------------------------------")
+
+                log.info("---------------------------------------------------------------")
+                log.info("Compressing tiff files in directory {} and all subdirectories".format(composite_dir))
+                log.info("---------------------------------------------------------------")
+                for root, dirs, files in os.walk(composite_dir):
+                    all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                    for this_tiff in all_tiffs:
+                        pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
+
+                log.info("---------------------------------------------------------------")
+                log.info("Baseline image composite, file compression, zipping and deletion of")
+                log.info("intermediate file products (if selected) are complete.")
+                log.info("---------------------------------------------------------------")
+
+            else:
+                log.error("No cloud-masked L2A image products found in {}.".format(composite_l2_image_dir))
+                log.error("Cannot produce a median composite. Download and cloud-mask some images first.")
 
         # ------------------------------------------------------------------------
         # Step 2: Download change detection images for the specific time window (L2A where available plus additional L1C)
@@ -505,11 +723,36 @@ def rolling_detection(config_path,
             log.info("---------------------------------------------------------------")
             log.info("Image download and atmospheric correction for change detection images is complete.")
             log.info("---------------------------------------------------------------")
+
+            #TODO: delete L1C images if do_delete is True
+            if do_delete:
+                log.info("---------------------------------------------------------------")
+                log.info("Deleting L1C images downloaded for change detection.")
+                log.info("Keeping only the derived L2A images after atmospheric correction.")
+                log.info("---------------------------------------------------------------")
+                directory = l1_image_dir
+                log.info('Deleting {}'.format(directory))
+                shutil.rmtree(directory)
+                log.info("---------------------------------------------------------------")
+                log.info("Deletion complete")
+                log.info("---------------------------------------------------------------")
+            else:
+                if do_zip:
+                    log.info("---------------------------------------------------------------")
+                    log.info("Zipping L1C images downloaded for change detection")
+                    log.info("---------------------------------------------------------------")
+                    zip_contents(l1_image_dir)
+                    log.info("---------------------------------------------------------------")
+                    log.info("Zipping complete")
+                    log.info("---------------------------------------------------------------")
+
+            log.info("---------------------------------------------------------------")
             log.info("Applying simple cloud, cloud shadow and haze mask based on SCL files and stacking the masked band raster files.")
-            l2a_paths = [ f.path for f in os.scandir(l2_image_dir) if f.is_dir() ]
-            log.info("  l2_image_dir: {}".format(l2_image_dir))
-            log.info("  l2_masked_image_dir: {}".format(l2_masked_image_dir))
-            log.info("  bands: {}".format(bands))
+            log.info("---------------------------------------------------------------")
+            #l2a_paths = [ f.path for f in os.scandir(l2_image_dir) if f.is_dir() ]
+            #log.info("  l2_image_dir: {}".format(l2_image_dir))
+            #log.info("  l2_masked_image_dir: {}".format(l2_masked_image_dir))
+            #log.info("  bands: {}".format(bands))
             pyeo.raster_manipulation.apply_scl_cloud_mask(l2_image_dir, 
                                                           l2_masked_image_dir, 
                                                           scl_classes=[0,1,2,3,8,9,10,11],
@@ -520,14 +763,54 @@ def rolling_detection(config_path,
                                                           epsg=epsg,
                                                           skip_existing=skip_existing)
 
-            log.info("Compressing tiff files in directory {} and all subdirectories".format(change_image_dir))
-            for root, dirs, files in os.walk(composite_dir):
+            log.info("---------------------------------------------------------------")
+            log.info("Cloud masking and band stacking of new L2A images are complete.")
+            log.info("---------------------------------------------------------------")
+
+            if do_quicklooks or do_all:
+                log.info("---------------------------------------------------------------")
+                log.info("Producing quicklooks.")
+                log.info("---------------------------------------------------------------")
+                dirs_for_quicklooks = [l2_masked_image_dir]
+                for main_dir in dirs_for_quicklooks: 
+                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                    #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
+                    if len(files) == 0:
+                        log.warning("No images found in {}.".format(main_dir))
+                    else:    
+                        for f in files:
+                            quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
+                            log.info("Creating quicklook: {}".format(quicklook_path))
+                            pyeo.raster_manipulation.create_quicklook(f, 
+                                                                      quicklook_path,
+                                                                      width=512, 
+                                                                      height=512, 
+                                                                      format="PNG", 
+                                                                      bands=[3,2,1],
+                                                                      scale_factors=[[0,2000,0,255]]
+                                                                      )
+            log.info("Quicklooks complete.")
+
+            if do_zip:
+                log.info("---------------------------------------------------------------")
+                log.info("Zipping L2A images downloaded for change detection")
+                log.info("---------------------------------------------------------------")
+                zip_contents(l2_image_dir)
+                log.info("---------------------------------------------------------------")
+                log.info("Zipping complete")
+                log.info("---------------------------------------------------------------")
+
+            log.info("---------------------------------------------------------------")
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(l2_masked_image_dir))
+            log.info("---------------------------------------------------------------")
+            for root, dirs, files in os.walk(l2_masked_image_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
                     pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
             log.info("---------------------------------------------------------------")
-            log.info("Cloud masking of change detection images is complete.")
+            log.info("Pre-processing of change detection images, file compression, zipping")
+            log.info("and deletion of intermediate file products (if selected) are complete.")
             log.info("---------------------------------------------------------------")
 
         # ------------------------------------------------------------------------
@@ -557,8 +840,10 @@ def rolling_detection(config_path,
                                                    chunks=chunks,
                                                    skip_existing=skip_existing)
 
+            log.info("---------------------------------------------------------------")
             log.info("Compressing tiff files in directory {} and all subdirectories".format(categorised_image_dir))
-            for root, dirs, files in os.walk(composite_dir):
+            log.info("---------------------------------------------------------------")
+            for root, dirs, files in os.walk(categorised_image_dir):
                 all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
                 for this_tiff in all_tiffs:
                     pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
@@ -567,22 +852,43 @@ def rolling_detection(config_path,
             log.info("Classification of all images is complete.")
             log.info("---------------------------------------------------------------")
 
+            if do_quicklooks or do_all:
+                log.info("---------------------------------------------------------------")
+                log.info("Producing quicklooks.")
+                log.info("---------------------------------------------------------------")
+                dirs_for_quicklooks = [categorised_image_dir]
+                for main_dir in dirs_for_quicklooks: 
+                    #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
+                    if len(files) == 0:
+                        log.warning("No images found in {}.".format(main_dir))
+                    else:    
+                        for f in files:
+                            quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
+                            log.info("Creating quicklook: {}".format(quicklook_path))
+                            pyeo.raster_manipulation.create_quicklook(f, 
+                                                                      quicklook_path,
+                                                                      width=512, 
+                                                                      height=512, 
+                                                                      format="PNG"
+                                                                      )
+            log.info("Quicklooks complete.")
+
+
         # ------------------------------------------------------------------------
         # Step 4: Pair up the class images with the composite baseline map 
         # and identify all pixels with the change between groups of classes of interest.
-        # Optionally applies a sieve filter to the class images.
+        # Optionally applies a sieve filter to the class images if specified in the ini file.
+        # Confirms detected changes by NDVI differencing.
         # ------------------------------------------------------------------------
-        #TODO: Implement the temporal pattern search here. 
-        # Class images contain 0 for clouds and missing values and a class otherwise.
-        # Sort the class images by timestamp.
-        # In pyeo.raster_manipulation.change_from_class_maps(), search for temporal pattern (number of subsequent change detections, ignore cloudy pixels)
-        # Add a third layer to the report file with the temporal paths found.
 
         if do_all or do_change:
             log.info("---------------------------------------------------------------")
             log.info("Creating change layers from stacked class images.")
             log.info("---------------------------------------------------------------")
-            log.info("Change of interest is from any of the classes {} to any of the classes {}.".format(from_classes, to_classes))
+            log.info("Changes of interest:")
+            log.info("  from any of the classes {}".format(from_classes))
+            log.info("  to   any of the classes {}".format(to_classes))
 
             # optionally sieve the class images
             if sieve > 0:
@@ -593,9 +899,10 @@ def rolling_detection(config_path,
                                                                         sieve = sieve,
                                                                         out_type="GTiff", 
                                                                         skip_existing=skip_existing)
-
+                # if sieve was chosen, work with the sieved class images
                 class_image_dir = sieved_image_dir
             else:
+                # if sieve was not chosen, work with the original class images
                 class_image_dir = categorised_image_dir
 
             # get all image paths in the classification maps directory except the class composites
@@ -685,6 +992,8 @@ def rolling_detection(config_path,
                     # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
                     #TODO: In change_from_class_maps(), add a flag (e.g. -1) whether a pixel was a cloud in the later image.
                     # Applying check whether dNDVI < -0.2, i.e. greenness has decreased over changed areas
+                
+                    log.info("Includes a rolling update of the report image product based on each new change detection image.")
                     pyeo.raster_manipulation.__change_from_class_maps(latest_class_composite_path,
                                                                 image,
                                                                 change_raster, 
@@ -707,12 +1016,30 @@ def rolling_detection(config_path,
                                                                 skip_existing = skip_existing
                                                                 )
 
-            if do_dev:
-                #TODO: In combine_date_maps, also extract the length of consecutive detections over time.
-                #TODO: Add a third layer with the length of confirmation sequence over time.
-                #pyeo.raster_manipulation.__combine_date_maps(date_image_paths, output_product)
-                pass
-            else:
+            log.info("---------------------------------------------------------------")
+            log.info("Post-classification change detection complete.")
+            log.info("---------------------------------------------------------------")
+
+            log.info("---------------------------------------------------------------")
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(probability_image_dir))
+            log.info("---------------------------------------------------------------")
+            for root, dirs, files in os.walk(probability_image_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
+
+            log.info("---------------------------------------------------------------")
+            log.info("Compressing tiff files in directory {} and all subdirectories".format(sieved_image_dir))
+            log.info("---------------------------------------------------------------")
+            for root, dirs, files in os.walk(sieved_image_dir):
+                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
+                for this_tiff in all_tiffs:
+                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
+
+            if not do_dev:
+                log.info("---------------------------------------------------------------")
+                log.info("Creating aggregated report file. Deprecated in the development version.")
+                log.info("---------------------------------------------------------------")
                 # combine all change layers into one output raster with two layers:
                 #   (1) pixels show the earliest change detection date (expressed as the number of days since 1/1/2000)
                 #   (2) pixels show the number of change detection dates (summed up over all change images in the folder)
@@ -731,25 +1058,65 @@ def rolling_detection(config_path,
                                               )
                 log.info("Combining date maps: {}".format(date_image_paths))
                 pyeo.raster_manipulation.combine_date_maps(date_image_paths, output_product)
-            log.info("Compressing the report image: {}".format(output_product))
-            pyeo.raster_manipulation.compress_tiff(output_product, output_product)
-
-            log.info("Created combined raster file with two layers: {}".format(output_product))
-
-            log.info("Compressing tiff files in directory {} and all subdirectories".format(sieved_image_dir))
-            for root, dirs, files in os.walk(composite_dir):
-                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
-                for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
-
-            log.info("Compressing tiff files in directory {} and all subdirectories".format(sieved_image_dir))
-            for root, dirs, files in os.walk(probability_image_dir):
-                all_tiffs = [image_name for image_name in files if image_name.endswith(".tif")]
-                for this_tiff in all_tiffs:
-                    pyeo.raster_manipulation.compress_tiff(os.path.join(root, this_tiff), os.path.join(root, this_tiff))
 
             log.info("---------------------------------------------------------------")
-            log.info("Change detection layers completed and output product aggregated.")
+            log.info("Report image product completed / updated: {}".format(output_product))
+            log.info("Compressing the report image.")
+            log.info("---------------------------------------------------------------")
+            pyeo.raster_manipulation.compress_tiff(output_product, output_product)
+
+            if do_delete:
+                log.info("---------------------------------------------------------------")
+                log.info("Deleting intermediate class images used in change detection.")
+                log.info("They can be recreated from the cloud-masked, band-stacked L2A images and the saved model.")
+                log.info("---------------------------------------------------------------")
+                directories = [ categorised_image_dir, sieved_image_dir, probability_image_dir ]
+                for directory in directories:
+                    paths = [f for f in os.listdir(directory)]
+                    for f in paths:
+                        # keep the classified composite layers and the report image product for the next change detection
+                        if not f.startswith("composite_") and not f.startswith("report_"):
+                            log.info('Deleting {}'.format(os.path.join(directory, f)))
+                            if os.path.isdir(os.path.join(directory, f)):
+                                shutil.rmtree(os.path.join(directory, f))
+                            else:
+                                os.remove(os.path.join(directory, f))
+                log.info("---------------------------------------------------------------")
+                log.info("Deletion of intermediate file products complete.")
+                log.info("---------------------------------------------------------------")
+            else:
+                if do_zip:
+                    log.info("---------------------------------------------------------------")
+                    log.info("Zipping intermediate class images used in change detection")
+                    log.info("---------------------------------------------------------------")
+                    directories = [ categorised_image_dir, sieved_image_dir ]
+                    for directory in directories:
+                        zip_contents(directory, notstartswith = ["composite_", "report_"])
+                    log.info("---------------------------------------------------------------")
+                    log.info("Zipping complete")
+                    log.info("---------------------------------------------------------------")
+
+            log.info("---------------------------------------------------------------")
+            log.info("Change detection and report image product updating, file compression, zipping")
+            log.info("and deletion of intermediate file products (if selected) are complete.")
+            log.info("---------------------------------------------------------------")
+
+        if do_delete:
+            log.info("---------------------------------------------------------------")
+            log.info("Deleting temporary directories starting with \'tmp*\'")
+            log.info("These can be left over from interrupted processing runs.")
+            log.info("---------------------------------------------------------------")
+            directory = tile_root_dir
+            for root, dirs, files in os.walk(directory):
+                temp_dirs = [d for d in dirs if d.startswith("tmp")]
+                for temp_dir in temp_dirs:
+                    log.info('Deleting {}'.format(os.path.join(root, temp_dir)))
+                    if os.path.isdir(os.path.join(directory, f)):
+                        shutil.rmtree(os.path.join(directory, f))
+                    else:
+                        log.warning("This should not have happened. {} is not a directory. Skipping deletion.".format(os.path.join(root, temp_dir)))
+            log.info("---------------------------------------------------------------")
+            log.info("Deletion of temporary directories complete.")
             log.info("---------------------------------------------------------------")
 
         # ------------------------------------------------------------------------
@@ -758,6 +1125,10 @@ def rolling_detection(config_path,
         # ------------------------------------------------------------------------
 
         if do_update or do_all:
+            log.warning("---------------------------------------------------------------")
+            log.warning("Updating of the baseline composite with new imagery is deprecated and will be ignored.")
+            log.warning("---------------------------------------------------------------")
+            '''
             log.info("---------------------------------------------------------------")
             log.info("Updating baseline composite with new imagery.")
             log.info("---------------------------------------------------------------")
@@ -854,125 +1225,8 @@ def rolling_detection(config_path,
                                                                          missing=0
                                                                          )
                 latest_composite_path = new_composite_path
-
-        # ------------------------------------------------------------------------
-        # Step 6: Create quicklooks for fast visualisation and quality assurance of output
-        # ------------------------------------------------------------------------
-
-        if do_quicklooks or do_all:
-            log.info("---------------------------------------------------------------")
-            log.info("Producing quicklooks.")
-            log.info("---------------------------------------------------------------")
-            dirs_for_quicklooks = [composite_dir, l2_masked_image_dir, categorised_image_dir, probability_image_dir]
-            for main_dir in dirs_for_quicklooks: 
-                files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
-                #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
-                if len(files) == 0:
-                    log.warning("No images found in {}.".format(main_dir))
-                else:    
-                    for f in files:
-                        log.info("Creating quicklook image from: {}".format(f))
-                        quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
-                        log.info("                           at: {}".format(quicklook_path))
-                        pyeo.raster_manipulation.create_quicklook(f, 
-                                                                  quicklook_path,
-                                                                  width=512, 
-                                                                  height=512, 
-                                                                  format="PNG", 
-                                                                  bands=[3,2,1],
-                                                                  scale_factors=[[0,2000,0,255]]
-                                                                  )
-            log.info("Quicklooks complete.")
-
-
-        # ------------------------------------------------------------------------
-        # Step 6: Free up disk space by deleting all downloaded Sentinel-2 images and intermediate processing steps
-        #         or zip up all images that are not used anymore  
-        # ------------------------------------------------------------------------
-
-        if do_delete:
-            log.info("---------------------------------------------------------------")
-            log.info("Deleting downloaded images and intermediate products after use to free up disk space.")
-            log.info("---------------------------------------------------------------")
-            log.warning("This function is currently disabled.")
-            '''
-            dirlist = [ l1_image_dir,
-                        l2_image_dir,
-                        l2_masked_image_dir,
-                        composite_l1_image_dir,
-                        composite_l2_image_dir,
-                        composite_l2_masked_image_dir
-                        ]
-
-            for dir in dirlist:
-                confirmation = input('Are you sure you want to delete this directory and all its contents: {} (yes/no)? '.format(dir))
-                if confirmation == "yes" or confirmation =="Yes" or confirmation =="y" or confirmation =="Y":
-                    log.info('User confirmation received to delete {}'.format(dir))
-                    shutil.rmtree(dir)
-            # Find all class images and delete them, except the class composite raster file
-            class_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() \
-                            and os.path.basename(f).endswith("_class.tif") \
-                            and not os.path.basename(f).startswith("composite")]
-            print("Marked for deletion: ")
-            for class_path in class_paths:
-                print("  {}".format(class_path))
-            confirmation = input('Are you sure you want to delete all these files (yes/no)? ')
-            if confirmation == "yes" or confirmation =="Yes" or confirmation =="y" or confirmation =="Y":
-                log.info('User confirmation received to delete class image file list:')
-                for class_path in class_paths:
-                    log.info("  {}".format(class_path))
-                    shutil.rm(class_path)
-            # Find all change images and delete them, except the report raster file
-            change_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() \
-                             and os.path.basename(f).endswith(".tif") \
-                             and os.path.basename(f).startswith("change_") ]
-            print("Marked for deletion: ")
-            for change_path in change_paths:
-                print("  {}".format(change_path))
-            confirmation = input('Are you sure you want to delete all these files (yes/no)? ')
-            if confirmation == "yes" or confirmation =="Yes" or confirmation =="y" or confirmation =="Y":
-                log.info('User confirmation received to delete change detection file list:')
-                for change_path in change_paths:
-                    log.info("  {}".format(change_path))
-                    shutil.rm(change_path)
             '''
 
-        if do_zip:
-            log.info("---------------------------------------------------------------")
-            log.info("Zipping downloaded images and intermediate products after use to free up disk space.")
-            log.info("---------------------------------------------------------------")
-            dirlist = [ l1_image_dir,
-                        l2_image_dir,
-                        l2_masked_image_dir,
-                        composite_l1_image_dir,
-                        composite_l2_image_dir,
-                        composite_l2_masked_image_dir
-                        ]
-
-            for dir in dirlist:
-                paths = [f for f in os.listdir(dir)]
-                for f in paths:
-                    log.info('Zipping file {}'.format(f))
-                    shutil.make_archive(f[:-4]+'.zip', 'zip', f)
-
-            # Find all class images and archive them, except the class composite raster file
-            class_paths = [ f.path for f in os.scandir(categorised_image_dir) if f.is_file() \
-                            and os.path.basename(f).endswith("_class.tif") \
-                            and not os.path.basename(f).startswith("composite")]
-            for class_path in class_paths:
-                log.info("Zipping file {}".format(class_path))
-                shutil.make_archive(class_path[:-4]+'.zip', 'zip', class_path)
-            # Find all change images and archive them, except the report raster file
-            change_paths = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() \
-                             and os.path.basename(f).endswith(".tif") \
-                             and os.path.basename(f).startswith("change_") ]
-            for change_path in change_paths:
-                log.info("Zipping file {}".format(change_path))
-                shutil.make_archive(change_path[:-4]+'.zip', 'zip', change_path)
-
-        # ------------------------------------------------------------------------
-        # End of processing
-        # ------------------------------------------------------------------------
         log.info("---------------------------------------------------------------")
         log.info("---                  PROCESSING END                         ---")
         log.info("---------------------------------------------------------------")
@@ -1018,7 +1272,7 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--build_prob_image', dest='build_prob_image', action='store_true', default=False,
                         help="If present, build a confidence map of pixels. These tend to be large.")
     parser.add_argument('-u', '--update', dest='do_update', action='store_true', default=False,
-                        help="Builds a new cloud-free composite in composite/ from the latest image and mask"
+                        help="Deprecated. Builds a new cloud-free composite in composite/ from the latest image and mask"
                              " in images/merged")
     parser.add_argument('-q', '--quicklooks', dest='do_quicklooks', action='store_true', default=False,
                         help="Creates quicklooks for all composites, L2A change images, classified images and probability images.")
