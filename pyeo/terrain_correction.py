@@ -12,7 +12,9 @@ from osgeo import gdal
 from tempfile import TemporaryDirectory
 import os.path as p
 
-import osr
+# I.R. ogr, osr now incorporated in osgeo
+# import osr
+from osgeo import osr
 
 import pyeo.filesystem_utilities as fu
 import pyeo.coordinate_manipulation as cm
@@ -87,7 +89,7 @@ def generate_latlon(x, y,geotransform, transformer):
 
 
 def _generate_latlon_arrays(array, transformer, geotransform):
-    
+
     def generate_latlon_for_here(x, y):
         return generate_latlon(x, y, geotransform, transformer)
 
@@ -150,7 +152,7 @@ def calculate_ic_array(slope_raster_path, aspect_raster_path, raster_datetime, i
 
         print("pixels to process: {}".format(np.product(lat_array.shape)))
         ic_array, zenith_array = ic_calculation(lat_array, lon_array, aspect_array, slope_array, raster_datetime)
-        
+
         if ic_raster_out_path:
             ras.save_array_as_image(ic_array, ic_raster_out_path, aspect_image.GetGeoTransform(), aspect_image.GetProjection())
         return ic_array, zenith_array, slope_array
@@ -226,7 +228,7 @@ def do_terrain_correction(raster_path, dem_path, out_raster_path, raster_datetim
         A datetime.DateTime object **with timezone set**
 
     """
-   
+
     with TemporaryDirectory() as td:
 
         in_raster = gdal.Open(raster_path)
@@ -250,7 +252,7 @@ def do_terrain_correction(raster_path, dem_path, out_raster_path, raster_datetim
         angle_raster_path = preprocess_dem(angle_raster_path, raster_path, td)
         ic_array, zenith_array, slope_array = calculate_ic_array(slope_raster_path, angle_raster_path, raster_datetime,
                                                                  "ic_array.tif")
-        
+
         if is_landsat:
             in_array = in_array.T
 

@@ -41,7 +41,8 @@ import random
 from scipy import sparse as sp
 import shutil
 from sklearn import ensemble as ens
-from sklearn.externals import joblib as sklearn_joblib
+# I.R.
+# from sklearn.externals import joblib as sklearn_joblib
 from sklearn.model_selection import cross_val_score, train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn import metrics
 import sys
@@ -182,13 +183,17 @@ def classify_image(image_path, model_path, class_out_path, prob_out_path=None, a
         chunks = autochunk(image)
         log.info("Autochunk to {} chunks".format(chunks))
     try:
-        model = sklearn_joblib.load(model_path)
+        # I.R.
+        # model = sklearn_joblib.load(model_path)
+        model = joblib.load(model_path)
     except KeyError as e:
-        log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
-        model = joblib.load(model_path)
+        # log.warning("Sklearn joblib import failed,trying generic joblib")
+        log.warning("KeyError: joblib import failed: {}".format(e))
+        # model = joblib.load(model_path)
     except TypeError as e:
-        log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
-        model = joblib.load(model_path)
+        log.warning("TypeError: joblib import failed: {}".format(e))
+        # log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
+        # model = joblib.load(model_path)
     with TemporaryDirectory(dir=os.getcwd()) as td:
         class_out_temp = os.path.join(td, os.path.basename(class_out_path))
         class_out_image = create_matching_dataset(image, class_out_temp, format=str(out_format), datatype=gdal.GDT_Byte)
@@ -333,6 +338,7 @@ def classify_image_and_composite(image_path, composite_path, model_path, class_o
        - model.predict_proba() : If called with prob_out_path, a function that takes a set of n band inputs from a pixel
                                 and produces n_classes_ outputs corresponding to the probabilties of a given pixel being
                                 that class
+    
 
     if skip_existing:
         log.info("Checking for existing classification {}".format(class_out_path))
@@ -348,13 +354,17 @@ def classify_image_and_composite(image_path, composite_path, model_path, class_o
         num_chunks = autochunk(image)
         log.info("Autochunk to {} chunks".format(num_chunks))
     try:
-        model = sklearn_joblib.load(model_path)
-    except KeyError:
-        log.warning("Sklearn joblib import failed,trying generic joblib")
+        # I.R.
+        # model = sklearn_joblib.load(model_path)
         model = joblib.load(model_path)
-    except TypeError:
-        log.warning("Sklearn joblib import failed,trying generic joblib")
-        model = joblib.load(model_path)
+    except KeyError as e:
+        # log.warning("Sklearn joblib import failed,trying generic joblib")
+        log.warning("KeyError: joblib import failed: {}".format(e))
+        # model = joblib.load(model_path)
+    except TypeError as e:
+        log.warning("TypeError: joblib import failed: {}".format(e))
+        # log.warning("Sklearn joblib import failed,trying generic joblib: {}".format(e))
+        # model = joblib.load(model_path)
     class_out_image = create_matching_dataset(image, class_out_path, format=out_type, datatype=gdal.GDT_Byte)
     log.info("Created classification image file: {}".format(class_out_path))
     if prob_out_path:
@@ -465,7 +475,7 @@ def classify_image_and_composite(image_path, composite_path, model_path, class_o
     """
     log.error("This function currently does nothing. Call pyeo.classification.change_from_composite instead.")
     return ""
-    
+
 
 
 
@@ -547,13 +557,13 @@ def classify_directory(in_dir, model_path, class_out_dir, prob_out_dir = None,
             prob_out_path = os.path.join(prob_out_dir, image_name+"_prob.tif")
         else:
             prob_out_path = None
-        classify_image(image_path = image_path, 
-                       model_path = model_path, 
-                       class_out_path = class_out_path, 
+        classify_image(image_path = image_path,
+                       model_path = model_path,
+                       class_out_path = class_out_path,
                        prob_out_path = prob_out_path,
-                       apply_mask = apply_mask, 
-                       out_format = out_type, 
-                       chunks = chunks, 
+                       apply_mask = apply_mask,
+                       out_format = out_type,
+                       chunks = chunks,
                        skip_existing=skip_existing)
 
 
@@ -701,7 +711,7 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 10, attr
     ----
     For full details of how to create an appropriate shapefile, see [here](../index.html#training_data).
     At present, the model is an ExtraTreesClassifier arrived at by tpot:
-    
+
     .. code:: python
 
         model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55,
@@ -741,7 +751,7 @@ def create_trained_model(training_image_file_paths, cross_val_repeats = 10, attr
     log.info("  Class data labels   : {}".format(classes.shape))
     log.info("  Learning data labels: {}".format(learning_data.shape))
 
-    ''' this saves the training data to a text file, currently disabled 
+    ''' this saves the training data to a text file, currently disabled
     train_out_path = os.path.join(os.path.dirname(training_image_file_paths[0]), 'training_data.txt')
     log.info("  Writing out training data to: {}".format(train_out_path))
     with open(train_out_path, 'w') as f:
@@ -836,7 +846,7 @@ def create_model_from_signatures(sig_csv_path, model_out, sig_datatype=np.int32)
     At present, the model is an ExtraTreesClassifier arrived at by tpot:
 
     .. code:: python
-    
+
         model = ens.ExtraTreesClassifier(bootstrap=False, criterion="gini", max_features=0.55, min_samples_leaf=2,
               min_samples_split=16, n_estimators=100, n_jobs=-1, class_weight='balanced')
 
@@ -882,7 +892,7 @@ def get_shp_extent(shapefile):
     coordinate referencing system of the shapefile
     EPSG code of the shapefile
   '''
-  
+
   driver = ogr.GetDriverByName("ESRI Shapefile")
   ds = driver.Open(shapefile, 0)
 
@@ -895,7 +905,7 @@ def get_shp_extent(shapefile):
 
   # get EPSG code of the CRS
   EPSG = SpatialRef.GetAttrValue("AUTHORITY", 1)
-  
+
   # close file
   ds = None
 
@@ -905,7 +915,7 @@ def get_shp_extent(shapefile):
 def get_training_data(image_path, shape_path, attribute="CODE"):
     """
     Given an image and a shapefile with categories, returns training data and features suitable
-    for fitting a scikit-learn classifier.Image and shapefile must be in the same map projection / 
+    for fitting a scikit-learn classifier.Image and shapefile must be in the same map projection /
     coordinate referencing system.
 
     For full details of how to create an appropriate shapefile, see [here](../index.html#training_data).
@@ -938,10 +948,10 @@ def get_training_data(image_path, shape_path, attribute="CODE"):
     log.info("                   and {}".format(shape_path))
     if not os.path.exists(image_path):
         log.error("{} not found.".format(image_path))
-        sys.exit(1) 
+        sys.exit(1)
     if not os.path.exists(shape_path):
         log.error("{} not found.".format(shape_path))
-        sys.exit(1) 
+        sys.exit(1)
     # check that the two map projections have the same EPSG codes
     image = gdal.Open(image_path)
     epsg1 = osr.SpatialReference(wkt=image.GetProjection()).GetAttrValue('AUTHORITY',1)
@@ -1034,11 +1044,11 @@ def raster_reclass_binary(img_path, rcl_value, outFn, outFmt='GTiff', write_out=
 
 def shapefile_to_raster(shapefilename, inraster_filename, outraster_filename, verbose=False, nodata=0, attribute="CODE"):
     '''
-    Reads in a shapefile with polygons and produces a raster file that 
-    aligns with an input rasterfile (same corner coordinates, resolution, coordinate 
+    Reads in a shapefile with polygons and produces a raster file that
+    aligns with an input rasterfile (same corner coordinates, resolution, coordinate
     reference system and geotransform). Each pixel value in the output raster will
     indicate the number from the shapefile based on the selected attribute column.
-    Based on https://gis.stackexchange.com/questions/151339/rasterize-a-shapefile-with-geopandas-or-fiona-python  
+    Based on https://gis.stackexchange.com/questions/151339/rasterize-a-shapefile-with-geopandas-or-fiona-python
 
     Parameters
     ----------
@@ -1119,18 +1129,18 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
 
     Args:
       raster_paths = list of filenames and paths to the raster files to be classified in tiff format.
-        It is a condition that shapefiles of matching name exist in the same directory.      
+        It is a condition that shapefiles of matching name exist in the same directory.
       modelfile = filename and path to a pickle file to save the trained model to
       ntrees = number of trees in the random forest, default = 101
       attribute = string naming the attribute column to be rasterised in the shapefile
-      band_names = list of strings indicating the names of the bands (used for text output and labelling 
+      band_names = list of strings indicating the names of the bands (used for text output and labelling
         the learning data output file). If [], a sequence of numbers is assigned.
-      weights (optional) = a list of integers giving weights for all classes. 
+      weights (optional) = a list of integers giving weights for all classes.
         If not specified, all weights will be equal.
       balanced (optional) = if True, use a balanced number of training pixels per class
       gridsearch : int, optional = Number of randomized random forests for gridsearch. Defaults to 1.
       k_fold : int, optional = Number of groups for k-fold validation during gridsearch. Defaults to 5.
-    
+
     Returns:
       random forest model object
     '''
@@ -1215,9 +1225,9 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
                 labels = labels + these_labels
                 log.info('This training data shapefile includes {} classes: {}'.format(nclasses, these_labels))
                 nbands = image.RasterCount
-                if nbands == 1:  
+                if nbands == 1:
                     log.info("{} band in image file".format(nbands))
-                else: 
+                else:
                     log.info("{} bands in image file".format(nbands))
                 if len(band_names) == nbands:
                     log.info("  {}".format(band_names))
@@ -1275,7 +1285,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
         for c in labels:
             found = len(classes[classes == c])
             log.info("  Class {} has {} training pixels".format(c, found))
-    
+
     #TODO: Test this bit: save training data to file and produce basic signature statistics by class
     if len(band_names) != nbands:
         band_names = [str(i+1) for i in range(nbands)]
@@ -1294,15 +1304,15 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
         for c in range(np.max(classes)):
             if c+1 in classes:
                 for b in band_names:
-                    log.info("{}, {}, {}, {}, {}, {}".format(c+1, 
-                                                              b, 
+                    log.info("{}, {}, {}, {}, {}, {}".format(c+1,
+                                                              b,
                                                               learning_df.groupby('label').min()[b][c+1],
                                                               learning_df.groupby('label').max()[b][c+1],
                                                               learning_df.groupby('label').mean()[b][c+1],
                                                               learning_df.groupby('label').std()[b][c+1]
                                                               ))
-                    f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(c+1, 
-                                                              b, 
+                    f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(c+1,
+                                                              b,
                                                               learning_df.groupby('label').min()[b][c+1],
                                                               learning_df.groupby('label').max()[b][c+1],
                                                               learning_df.groupby('label').mean()[b][c+1],
@@ -1316,7 +1326,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     w = dict() # create an empty dictionary
     for i in range(nclasses): # iterate over all classes from 0 to nclasses-1
       if weights == None:
-        w[i+1] = '1' # if not specified, set all weights to 1  
+        w[i+1] = '1' # if not specified, set all weights to 1
       else:
         if weights.size >= nclasses: # if enough weights are given, assign them
           w[i+1] = weights[i] # assign the weights if specified by the user
@@ -1333,7 +1343,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     #sc = StandardScaler()
     #normed_train_data = pd.DataFrame(sc.fit_transform(training), columns = X.columns)
     #normed_test_data = pd.DataFrame(sc.fit_transform(testing), columns = X.columns)
-    
+
     if gridsearch > 1:
         log.info("Grid search: Finding optimal parameter space for the random forest from {} forests.".format(gridsearch))
         # create a dictionary of values to choose from
@@ -1356,10 +1366,10 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
         rf_base = ens.RandomForestClassifier()
         rf = RandomizedSearchCV(estimator = rf_base,
                                 param_distributions = grid,
-                                n_iter = gridsearch, 
+                                n_iter = gridsearch,
                                 cv = k_fold,
                                 verbose=3,
-                                random_state=42, 
+                                random_state=42,
                                 n_jobs = 1)
 
         '''
@@ -1385,7 +1395,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
 
     # Accuracy assessment / validation
     preds = rf.predict(testing)
-    log.info("Accuracy assessment at model training stage")    
+    log.info("Accuracy assessment at model training stage")
     log.info("Training   classification accuracy (75% of data): {}".format(rf.score(training, training_classes)))
     log.info("Validation classification accuracy (25% of data): {}".format(rf.score(testing, testing_classes)))
     # Confusion matrix: Rows represent predicted classes, columns are the true classes
@@ -1396,11 +1406,11 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     log.info("Predicted class v")
     log.info("\n{}".format(confusion))
 
-    # build the Random Forest Classifier 
+    # build the Random Forest Classifier
     # for more information: http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
-    #OLD: rf = ens.RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4, 
-    #                            min_samples_split = 2, min_samples_leaf = 1, max_features = 'auto', 
-    #                            bootstrap = True, oob_score = True, n_jobs = -1, random_state = None, verbose = True)  
+    #OLD: rf = ens.RandomForestClassifier(class_weight = weights, n_estimators = ntrees, criterion = 'gini', max_depth = 4,
+    #                            min_samples_split = 2, min_samples_leaf = 1, max_features = 'auto',
+    #                            bootstrap = True, oob_score = True, n_jobs = -1, random_state = None, verbose = True)
     # fit the model to the training data and the feature dataset
     #rf = rf.fit(learning_data, classes)
 
@@ -1408,7 +1418,7 @@ def train_rf_model(raster_paths, modelfile, ntrees = 101, attribute = "CODE", ba
     joblib.dump(rf, modelfile)
 
     # calculate the feature importances
-    if gridsearch == 1:   
+    if gridsearch == 1:
         importances = rf.feature_importances_
     else:
         log.info("Best random forest estimator from gridsearch: {}".format(rf.best_estimator_))
@@ -1438,8 +1448,8 @@ def classify_rf(raster_path, modelfile, outfile, verbose = False):
       verbose (optional) = True or False. If True, provides additional printed output.
     '''
 
-    # Read Data    
-    image = gdal.Open(raster_path, 'r')   
+    # Read Data
+    image = gdal.Open(raster_path, 'r')
     image_array = image.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly)
     if verbose:
         log.info("image shape = {}".format(image.shape))
@@ -1447,21 +1457,21 @@ def classify_rf(raster_path, modelfile, outfile, verbose = False):
     if verbose:
         log.info(" {} bands".format(n))
     # load your random forest model from the pickle file
-    clf = joblib.load(modelfile)    
+    clf = joblib.load(modelfile)
     # to work with SciKitLearn, we have to reshape the raster as an image
     # this will change the shape from (bands, rows, columns) to (rows, columns, bands)
     img = reshape_as_image(image_array)
     # next, we have to reshape the image again into (rows * columns, bands)
     # because that is what SciKitLearn asks for
-    new_shape = (img.shape[0] * img.shape[1], img.shape[2]) 
+    new_shape = (img.shape[0] * img.shape[1], img.shape[2])
     if verbose:
         log.info("img[:, :, :n].shape = {}".format(img[:, :, :n].shape))
         log.info("new_shape = {}".format(new_shape))
-    img_as_array = img[:, :, :n].reshape(new_shape)   
+    img_as_array = img[:, :, :n].reshape(new_shape)
     if verbose:
         log.info("img_as_array.shape = {}".format(img_as_array.shape))
     # classify it
-    class_prediction = clf.predict(img_as_array) 
+    class_prediction = clf.predict(img_as_array)
     # and reshape the flattened array back to its original dimensions
     if verbose:
         log.info("class_prediction.shape = {}".format(class_prediction.shape))
@@ -1470,15 +1480,15 @@ def classify_rf(raster_path, modelfile, outfile, verbose = False):
     if verbose:
         log.info(class_prediction.dtype)
     # save the image as a uint8 Geotiff file
-    tmpfile = rasterio.open(outfile, 'w', driver='Gtiff', 
+    tmpfile = rasterio.open(outfile, 'w', driver='Gtiff',
                             width=src.width, height=src.height,
-                            count=1, crs=src.crs, transform=src.transform, 
+                            count=1, crs=src.crs, transform=src.transform,
                             dtype=np.uint8)
 
     tmpfile.write(class_prediction, 1)
 
     tmpfile.close()
-    return  
+    return
 
 
 def plot_signatures(learning_path, out_path, format="PNG"):
@@ -1516,7 +1526,7 @@ def plot_signatures(learning_path, out_path, format="PNG"):
         this = -1
         for bx, bandx in enumerate(bands):
             for by, bandy in enumerate(bands[bx+1:]):
-                this = this + 1 # number of the plot  
+                this = this + 1 # number of the plot
                 log.info("Making plot {} of {}".format(this + 1, nplots))
                 ax[this].margins(0.05)
                 for name, group in groups:
@@ -1528,11 +1538,11 @@ def plot_signatures(learning_path, out_path, format="PNG"):
                         y = random.sample(list(group[bandy]), 10000)
                     else:
                         y = list(group[bandy])
-                    ax[this].plot(x, 
-                                  y, 
-                                  marker='o', 
-                                  linestyle='', 
-                                  ms=2, 
+                    ax[this].plot(x,
+                                  y,
+                                  marker='o',
+                                  linestyle='',
+                                  ms=2,
                                   label=name)
                 #ax[this].set_aspect('equal', adjustable='box')
                 ax[this].legend()
@@ -1540,8 +1550,5 @@ def plot_signatures(learning_path, out_path, format="PNG"):
                 ax[this].set_ylabel(bandy)
         log.info("Saving figure to {}".format(out_path))
         plt.savefig(out_path, dpi=72, format=format, pad_inches=0.1, facecolor='white')
-        plt.close(fig) 
+        plt.close(fig)
     return
-    
-
-

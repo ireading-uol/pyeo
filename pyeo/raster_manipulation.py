@@ -118,12 +118,14 @@ import faulthandler
 import glob
 import logging
 import numpy as np
-import ogr
+# I.R.
+# import ogr
 import os
 from osgeo import gdal, gdalconst
 from osgeo import gdal_array, osr, ogr
 from osgeo.gdal_array import NumericTypeCodeToGDALTypeCode, GDALTypeCodeToNumericTypeCode
-import osr
+# I.R.
+# import osr
 import pdb
 import re
 import shutil
@@ -601,7 +603,7 @@ def trim_image(in_raster_path, out_raster_path, polygon, format="GTiff"):
 
 def mosaic_images(raster_path, out_raster_path, format="GTiff", datatype=gdal.GDT_Int32, nodata = 0):
     """
-    Mosaics multiple images in the directory raster_path with the same number of layers into one single image. 
+    Mosaics multiple images in the directory raster_path with the same number of layers into one single image.
     Overwrites overlapping pixels with the value furthest down raster_paths. Takes projection from the first raster.
     The output mosaic file will have a name that contains all unique tile IDs and the earliest and latest
     acquisition date and time from the raster file names.
@@ -699,7 +701,7 @@ def update_composite_with_images(composite_in_path, in_raster_path_list, composi
     generate_date_image : bool, optional
         If true, generates a single-layer raster containing the dates of each image detected - see below.
     missing : missing value to be ignored, 0 by default
-        
+
     Returns
     -------
     composite_path : str
@@ -743,7 +745,7 @@ def update_composite_with_images(composite_in_path, in_raster_path_list, composi
         output_array = np.expand_dims(output_array, 0)
 
     in_composite_array = get_array(in_composite)
-    #TODO: check this works 
+    #TODO: check this works
     np.copyto(output_array, in_composite_array)
 
     for i, in_raster in enumerate(in_raster_list):
@@ -918,7 +920,7 @@ def get_stats_from_raster_file(in_raster_path, format="GTiff", missing_data_valu
         if in_array.count() == 0:
             result.update({'band_{}'.format(band+1) : ' contains only missing values.'})
         else:
-            result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" % 
+            result.update({'band_{}'.format(band+1) : "min=%.3f, max=%3f, mean=%3f, stdev=%3f" %
                           (np.nanmin(in_array[~in_array.mask]), np.nanmax(in_array[~in_array.mask]), \
                            np.nanmean(in_array[~in_array.mask]), np.nanstd(in_array[~in_array.mask]))})
     log.info("Raster file stats for {}".format(in_raster_path))
@@ -944,7 +946,7 @@ def get_dir_size(path='.'):
 
 def find_small_safe_dirs(path, threshold=600*1024*1024):
     """
-    Quickly finds all subdirectories ending with ".SAFE" or ".safe" and logs a warning if the 
+    Quickly finds all subdirectories ending with ".SAFE" or ".safe" and logs a warning if the
     directory size is less than a threshold, 600 MB by default. This indicates incomplete downloads
 
     Returns a list of all paths to the SAFE directories that are smaller than the threshold and a list of all sizes.
@@ -986,7 +988,7 @@ def get_file_sizes(dir_path):
         log.warning("No files found in {} and its subdirectories.".format(dir_path))
     for f in file_paths:
         size = os.path.getsize(f)
-        results.update({'{}'.format(f) : "{}".format(str(size))}) 
+        results.update({'{}'.format(f) : "{}".format(str(size))})
         log.info("File size of {} is {} MB.".format(f,str(size/1024/2024)))
     for key, item in results.items():
         log.info("   {} : {}".format(key, item))
@@ -997,7 +999,7 @@ def get_file_sizes(dir_path):
 def clever_composite_images(in_raster_path_list, composite_out_path, format="GTiff", chunks=10, generate_date_image=True,
                             missing_data_value=0):
     """
-    Works down in_raster_path_list, updating pixels in composite_out_path if not masked. Will also create 
+    Works down in_raster_path_list, updating pixels in composite_out_path if not masked. Will also create
     (optionally) a date image in the same directory. Processes raster stacks by splitting them into a number of chunks
     to avoid memory allocation errors.
 
@@ -1078,16 +1080,16 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
                 continue
             good_rasters = good_rasters + [f]
         in_raster_path_list = good_rasters.copy()
-                
+
         # determine chunk size
         chunksize = int(np.ceil(ysize / chunks))
         # create output raster file and copy metadata from first raster in the list
         result = driver.Create(out_raster_path, xsize=xsize, ysize=ysize, bands=1, eType=datatype)
         result.SetGeoTransform(in_gt)
         result.SetProjection(projection)
-        log.info("Chunk processing. {} chunks of size {}, {}.".format(chunks, chunksize, xsize)) 
+        log.info("Chunk processing. {} chunks of size {}, {}.".format(chunks, chunksize, xsize))
         for ch in range(chunks):
-            log.info("Processing chunk {}".format(ch)) 
+            log.info("Processing chunk {}".format(ch))
             xoff = 0
             yoff = ch * chunksize
             xs = xsize
@@ -1096,14 +1098,14 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
                 ys = chunksize
             else:
                 ys = ysize - ch * chunksize
-            #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
+            #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys))
             res = [] #reset the list of arrays that will contain the band rasters
             for f in in_raster_path_list:
-                log.info("Opening band {} from raster {}".format(band, f)) 
+                log.info("Opening band {} from raster {}".format(band, f))
                 ds = gdal.Open(f)
                 b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
                 if ds == None:
-                    log.error("Opening band {} from raster {} failed. Skipping.".format(band, f)) 
+                    log.error("Opening band {} from raster {} failed. Skipping.".format(band, f))
                 else:
                     res.append(b)
                 ds = None
@@ -1130,12 +1132,12 @@ def clever_composite_images(in_raster_path_list, composite_out_path, format="GTi
             #log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
             b[yoff:(yoff+ys), xoff:(xoff+xs)] = median_raster
             result.GetRasterBand(1).WriteArray(b)
-        result = None    
+        result = None
         res = None
         b = None
         median_raster = None
         return
-    
+
     in_raster = gdal.Open(in_raster_path_list[0])
     n_bands = in_raster.RasterCount
     in_raster = None
@@ -1199,7 +1201,7 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
     Notes
     -----
     Masks are assumed to be a multiplicative .msk file with the same path as their corresponding image; see REFERENCE.
-    All images must have the same number of layers and resolution, but do not have to be perfectly co-registered. 
+    All images must have the same number of layers and resolution, but do not have to be perfectly co-registered.
     If it does not exist, composite_out_path will be created. Takes projection, resolution, etc. from first band
     of first raster in list. Will reproject images and masks if they do not match initial raster.
 
@@ -1245,9 +1247,9 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
         result = driver.Create(out_raster_path, xsize=xsize, ysize=ysize, bands=1, eType=datatype)
         result.SetGeoTransform(in_gt)
         result.SetProjection(projection)
-        log.info("Chunk processing. {} chunks of size {}, {}.".format(chunks, chunksize, xsize)) 
+        log.info("Chunk processing. {} chunks of size {}, {}.".format(chunks, chunksize, xsize))
         for ch in range(chunks):
-            log.info("Processing chunk {}".format(ch)) 
+            log.info("Processing chunk {}".format(ch))
             xoff = 0
             yoff = ch * chunksize
             xs = xsize
@@ -1256,10 +1258,10 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
                 ys = chunksize
             else:
                 ys = ysize - ch * chunksize
-            #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys)) 
+            #log.info("xoff, yoff, xsize, ysize: {}, {}, {}, {}".format(xoff,yoff,xs,ys))
             res = [] # reset the stack of band rasters from all time slices
             for f in in_raster_path_list:
-                #log.info("Opening raster {}".format(f)) 
+                #log.info("Opening raster {}".format(f))
                 ds = gdal.Open(f)
                 b = ds.GetRasterBand(band).ReadAsArray(xoff, yoff, xs, ys)
                 res.append(b)
@@ -1277,7 +1279,7 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
             #log.info("             into [{}:{}, {}:{}]".format(yoff, yoff+ys, xoff, xoff+xs))
             b[yoff:(yoff+ys), xoff:(xoff+xs)] = median_raster
             result.GetRasterBand(1).WriteArray(b)
-        result = None    
+        result = None
         res = None
         b = None
         median_raster = None
@@ -1317,7 +1319,7 @@ def clever_composite_images_with_mask(in_raster_path_list, composite_out_path, f
         masked_image_paths.append(masked_image_path)
         if os.path.exists(masked_image_path):
             log.info("Output file {} already exists, skipping the masking step.".format(masked_image_path))
-        else:    
+        else:
             log.info('Producing cloud-masked image file: {}'.format(masked_image_path))
             #log.info('   from mask: {}'.format(mask_paths[i]))
             #log.info('   and raster: {}'.format(in_raster))
@@ -1506,7 +1508,7 @@ def clever_composite_directory(image_dir, composite_out_dir, format="GTiff", chu
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
     tile = get_sen_2_image_tile(os.path.basename(sorted_image_paths[-1]))
     composite_out_path = os.path.join(composite_out_dir, "composite_{}_{}.tif".format(tile,last_timestamp))
-    clever_composite_images(sorted_image_paths, composite_out_path, format, chunks=chunks, 
+    clever_composite_images(sorted_image_paths, composite_out_path, format, chunks=chunks,
                             generate_date_image=generate_date_images, missing_data_value=missing_data_value)
     return composite_out_path
 
@@ -1552,7 +1554,7 @@ def clever_composite_directory_with_masks(image_dir, composite_out_dir, format="
         log.info("Image number {} has time stamp {}".format(i+1, timestamp))
     last_timestamp = get_sen_2_image_timestamp(os.path.basename(sorted_image_paths[-1]))
     composite_out_path = os.path.join(composite_out_dir, "composite_{}.tif".format(last_timestamp))
-    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, chunks=chunks, 
+    clever_composite_images_with_mask(sorted_image_paths, composite_out_path, format, chunks=chunks,
                                       generate_date_image=generate_date_images, missing_data_value=missing_data_value)
     return composite_out_path
 
@@ -1815,7 +1817,7 @@ def resample_image_in_place(image_path, new_res):
         Pixel edge size in meters
 
     """
-    image = gdal.Open(image_path, gdal.GA_ReadOnly) 
+    image = gdal.Open(image_path, gdal.GA_ReadOnly)
     if image.RasterXSize == new_res and image.RasterYSize == new_res:
         log.info("Image already has {}m resolution: {}".format(new_res, image_path))
         image = None
@@ -1896,7 +1898,7 @@ def align_image_in_place(image_path, target_path):
         new_x = image_x - x_offset
     else:
         new_x = image_x + (image_res - x_offset)
-        
+
     # Likewise with y
     if -1 * (image_res / 2) <= y_offset <= image_res / 2:
         new_y = image_y - y_offset
@@ -2234,7 +2236,7 @@ def open_dataset_from_safe(safe_file_path, band, resolution = "10m"):
 def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_size=0, epsg=None,
                            bands=("B02", "B03", "B04", "B08"), out_resolution=10):
     """
-    For every .SAFE folder in l2_dir and L1_dir, merges the rasters of bands 2,3,4 and 8 into a single geotiff file, 
+    For every .SAFE folder in l2_dir and L1_dir, merges the rasters of bands 2,3,4 and 8 into a single geotiff file,
     creates a cloudmask from the combined fmask and sen2cor cloudmasks and reprojects to a given EPSG if provided.
 
     Parameters
@@ -2275,7 +2277,7 @@ def preprocess_sen2_images(l2_dir, out_dir, l1_dir, cloud_threshold=60, buffer_s
             temp_file = os.path.join(temp_dir, get_sen_2_granule_id(l2_safe_file)) + ".tif"
             out_path = os.path.join(out_dir, os.path.basename(temp_file))
             log.info("Output file containing all bands: {}".format(out_path))
-            
+
             if os.path.exists(out_path):
                 log.info("Output file already exists. Skipping the band merging step.")
             else:
@@ -2328,7 +2330,7 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
         Resolution to resample every image to - units are defined by the image projection. Default is 10.
     haze : number, optional
         Threshold if a haze filter is to be applied. If specified, all pixel values where "B02" > haze will be masked out.
-        Defaults to None. If set, recommended thresholds range from 325 to 600 but can vary by scene conditions.   
+        Defaults to None. If set, recommended thresholds range from 325 to 600 but can vary by scene conditions.
     epsg : int
         EPSG code of the map projection / CRS if output rasters shall be reprojected (warped)
     skip_existing : boolean
@@ -2674,7 +2676,7 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
     #                                 '--GIP_L2A', gipp_path],
     #                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     #                                universal_newlines=True)
-    
+
     while True:
         nextline = sen2cor_proc.stdout.readline()
         if len(nextline) > 0:
@@ -2741,7 +2743,7 @@ def get_sen2cor_version(sen2cor_path):
         A string of the version of sen2cor at sen2cor_path
 
     """
-    
+
     proc = subprocess.run([sen2cor_path, "--help"], stdout=subprocess.PIPE)
 
     help_string = proc.stdout.decode("utf-8")
@@ -2759,7 +2761,7 @@ def get_sen2cor_version(sen2cor_path):
             return match.group(1)
         else:
             raise FileNotFoundError("Version information not found; please check your sen2cor path.")
-            
+
 
 def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unprocessed_image=False):
     """
@@ -2840,7 +2842,7 @@ def create_mask_from_model(image_path, model_path, model_clear=0, num_chunks=10,
 
     """
     #TODO: Fix this properly. Deferred import to deal with circular reference
-    from pyeo.classification import classify_image  
+    from pyeo.classification import classify_image
     with TemporaryDirectory(dir=os.getcwd()) as td:
         #log.info("Making temp dir {}".format(td))
         log = logging.getLogger(__name__)
@@ -2924,7 +2926,7 @@ def create_mask_from_confidence_layer(l2_safe_path, out_path, cloud_conf_thresho
 
 def create_mask_from_scl_layer(l2_safe_path, out_path, scl_classes, buffer_size=0):
     """
-    Creates a multiplicative binary mask where pixels of class scl_class are set to 0 and 
+    Creates a multiplicative binary mask where pixels of class scl_class are set to 0 and
     other pixels are 1.
 
     Parameters
@@ -2934,7 +2936,7 @@ def create_mask_from_scl_layer(l2_safe_path, out_path, scl_classes, buffer_size=
     out_path : str
         Path to the new path
     scl_classes: list of int
-        Class values of the SCL scene classification layer to be set to 0 
+        Class values of the SCL scene classification layer to be set to 0
     buffer_size : int, optional
         The size of the buffer to apply around the masked out pixels (dilation)
 
@@ -3042,7 +3044,7 @@ def create_mask_from_band(in_raster_path, out_path, band, threshold, relation="s
     threshold : number
         Threshold to be applied when creating the mask
     relation : str
-        Relationship to be applied to the threshold, can be that pixels are "smaller" or "greater" 
+        Relationship to be applied to the threshold, can be that pixels are "smaller" or "greater"
         than the threshold to be set to 1.
     buffer_size : int
         If greater than 0, applies a buffer to the masked pixels of this size. Defaults to 0.
@@ -3140,7 +3142,7 @@ def add_masks(mask_paths, out_path, geometry_func="union"):
     return out_path
 
 
-def __change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to, report_path, 
+def __change_from_class_maps(old_class_path, new_class_path, change_raster, change_from, change_to, report_path,
                              skip_existing=False, old_image_dir=None, new_image_dir=None, viband1=None, viband2=None, threshold=None):
     """
     UNTESTED DEVELOPMENT VERSION:
@@ -3177,7 +3179,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         List of integers with the class codes to be used as 'to' in the change detection.
 
     report_path : str
-        Path to an aggregated report map that will be continuously updated with change detections from newer acquisition dates. 
+        Path to an aggregated report map that will be continuously updated with change detections from newer acquisition dates.
         Will be created if it does not exist.
 
     skip_existing : boolean
@@ -3205,7 +3207,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
     ----------
     change_raster : str (path to a raster file of type Int32)
         The path to the new change layer containing the acquisition date of the new class image
-        expressed as the difference to the 1/1/2000, where a change has been found, -1 for cloudy pixels 
+        expressed as the difference to the 1/1/2000, where a change has been found, -1 for cloudy pixels
         or missing data in the more recent classification map (pixels == 0) or zero otherwise.
     """
 
@@ -3222,10 +3224,10 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
     # create masks from the classes of interest
     with TemporaryDirectory(dir=os.getcwd()) as td:
         if not ( skip_existing and os.path.exists(change_raster) ):
-            from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path, 
+            from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path,
                                                               out_path = os.path.join(td, os.path.basename(old_class_path)[:-4] + "_temp.msk"),
                                                               classes_of_interest = change_from)
-            to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path, 
+            to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path,
                                                               out_path = os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
                                                               classes_of_interest = change_to)
             if from_class_mask_path == "" or to_class_mask_path == "":
@@ -3297,7 +3299,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
                         new_image = None
                         # calculate dVI = new minus old VI
                         dvi = vi_new - vi_old
-                        vi_new = None 
+                        vi_new = None
                         vi_old = None
                         # set all values where the VI difference exceeds the threshold to zero (no change)
                         change_array[np.where(dvi >= threshold)] = 0
@@ -3347,7 +3349,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
                                        report_last_updated_timestamp.strftime("%Y%m%dT%H%M%S"))
                                        )
         shutil.move(old_report_path, report_path)
-        
+
         #now update the report file layers
         change_image = gdal.Open(change_raster, gdal.GA_ReadOnly)
         change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
@@ -3372,9 +3374,9 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         log.info("layer 1 contains an additive map of the number of positive change detections")
         locs = ( change_array > 0 )
         out_report_array[1, locs] = out_report_array[1, locs] + 1
-        # layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and 
+        # layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and
         #   decreasing the counter whenever no change is detected, i.e. change array == 0
-        log.info("layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and") 
+        log.info("layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and")
         log.info("   decreasing the counter whenever no change is detected, i.e. change array == 0")
         # increase counter if a change was detected
         locs = ( change_array > 0 )
@@ -3427,10 +3429,10 @@ def change_from_class_maps(old_class_path, new_class_path, change_raster, change
         return
     # create masks from the classes of interest
     with TemporaryDirectory(dir=os.getcwd()) as td:
-        from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path, 
+        from_class_mask_path = create_mask_from_class_map(class_map_path = old_class_path,
                                                           out_path = os.path.join(td, os.path.basename(old_class_path)[:-4] + "_temp.msk"),
                                                           classes_of_interest = change_from)
-        to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path, 
+        to_class_mask_path =   create_mask_from_class_map(class_map_path = new_class_path,
                                                           out_path = os.path.join(td, os.path.basename(new_class_path)[:-4] + "_temp.msk"),
                                                           classes_of_interest = change_to)
         if from_class_mask_path == "" or to_class_mask_path == "":
@@ -3503,7 +3505,7 @@ def verify_change_detections(class_map_paths, out_path, classes_of_interest, buf
 def raster2array(raster_file):
     """
     Loads the contents of a raster file into an array.
-    
+
     Parameters
     ----------
     raster_file : str
@@ -3514,9 +3516,9 @@ def raster2array(raster_file):
 
 def array2raster(raster_file, new_raster_file, array):
     """
-    Saves the contents of an array to a new raster file and copies the projection from 
+    Saves the contents of an array to a new raster file and copies the projection from
     an existing raster file.
-    
+
     Parameters
     ----------
     raster_file : str
@@ -3553,18 +3555,18 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
     """
     Applies a mask of 0 and 1 values to a raster image with one or more bands in Geotiff format
     by multiplying each pixel value with the mask value.
-    
-    After: 
+
+    After:
         https://pcjericks.github.io/py-gdalogr-cookbook/raster_layers.html
-    
+
     Parameters
     ----------
     mask_path : str
         Paths and file name of the mask file
-        
+
     image_path : str
         Path and file name of the raster image file
-        
+
     masked_image_path : str
         Path and file name of the masked raster image file that will be created
 
@@ -3604,7 +3606,7 @@ def apply_mask_to_image(mask_path, image_path, masked_image_path):
                 clip_raster_to_intersection(temp_path_1, image_path, temp_path_2, is_landsat=False)
                 mask_path = mask_path.split(".")[0]+"_warped_clipped_resampled.tif"
                 ds = gdal.Open(temp_path_2)
-                ds_out = gdal.Translate(mask_path, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear') 
+                ds_out = gdal.Translate(mask_path, ds, format="GTiff", outputType=gdal.GDT_Float32, width=cols, height=rows, resampleAlg='bilinear')
                 ds = None
                 ds_out = None
                 mask = None
@@ -3641,10 +3643,10 @@ def apply_mask_to_dir(mask_path, image_dir, masked_image_dir):
     ----------
     mask_path : str
         Paths and file name of the mask file
-        
+
     image_dir : str
         Path and directory name which contains the raster image files in Geotiff format
-        
+
     masked_image_dir : str
         Path and directory name in which the masked raster image files will be created
     """
@@ -3656,7 +3658,7 @@ def apply_mask_to_dir(mask_path, image_dir, masked_image_dir):
     for image_file in image_files:
         masked_image_path = os.path.join(masked_image_dir, os.path.basename(image_file).split(".")[0]+"_masked.tif")
         apply_mask_to_image(mask_path, image_dir+'/'+image_file, masked_image_path)
-    
+
 
 def combine_masks(mask_paths, out_path, combination_func = 'and', geometry_func ="intersect"):
     """
@@ -4013,15 +4015,15 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
                 log.info("Using custom colour table for up to 12 classes (0..11)")
                 colors.SetColorEntry(0, (0, 0, 0, 0)) # no data
                 colors.SetColorEntry(1, (0, 100, 0, 255)) # Primary Forest
-                colors.SetColorEntry(2, (154, 205, 50, 255)) # plantation Forest 
-                colors.SetColorEntry(3, (139, 69, 19, 255)) # Bare Soil 
-                colors.SetColorEntry(4, (189, 183, 107, 255)) # Crops 
-                colors.SetColorEntry(5, (240, 230, 140, 255)) # Grassland 
-                colors.SetColorEntry(6, (0, 0, 205, 255)) # Open Water 
-                colors.SetColorEntry(7, (128, 0, 0, 255)) # Burn Scar 
-                colors.SetColorEntry(8, (255, 255, 255, 255)) # cloud 
-                colors.SetColorEntry(9, (60, 60, 60, 255)) # cloud shadow 
-                colors.SetColorEntry(10, (128, 128, 128, 255)) # Haze 
+                colors.SetColorEntry(2, (154, 205, 50, 255)) # plantation Forest
+                colors.SetColorEntry(3, (139, 69, 19, 255)) # Bare Soil
+                colors.SetColorEntry(4, (189, 183, 107, 255)) # Crops
+                colors.SetColorEntry(5, (240, 230, 140, 255)) # Grassland
+                colors.SetColorEntry(6, (0, 0, 205, 255)) # Open Water
+                colors.SetColorEntry(7, (128, 0, 0, 255)) # Burn Scar
+                colors.SetColorEntry(8, (255, 255, 255, 255)) # cloud
+                colors.SetColorEntry(9, (60, 60, 60, 255)) # cloud shadow
+                colors.SetColorEntry(10, (128, 128, 128, 255)) # Haze
                 colors.SetColorEntry(11, (46, 139, 87, 255)) # Open Woodland
                 colors.SetColorEntry(12, (92, 145, 92, 255)) # Toby's Woodland
             else:
@@ -4038,9 +4040,9 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
             out_image = None
             image = None
             band = None
-        except Exception as e: 
-            log.error("An error occurred: {}".format(e)) 
-            log.error("  Skipping quicklook for image: {}".format(out_raster_path)) 
+        except Exception as e:
+            log.error("An error occurred: {}".format(e))
+            log.error("  Skipping quicklook for image: {}".format(out_raster_path))
             image = None
             return
     else:
@@ -4049,7 +4051,7 @@ def create_quicklook(in_raster_path, out_raster_path, width, height, format="PNG
         image = None
     return out_raster_path
 
-    
+
 def __combine_date_maps(date_image_paths, output_product):
     '''
     UNTESTED DEVELOPMENT VERSION:
@@ -4292,7 +4294,7 @@ def sieve_image(image_path, out_path, neighbours = 8, sieve = 10, skip_existing 
         out_band = None
         image = None
     except:
-        log.warning("Could not open file for sieve filtering. Skipping. {}".format(image_path))   
+        log.warning("Could not open file for sieve filtering. Skipping. {}".format(image_path))
     return
 
 
@@ -4334,8 +4336,8 @@ def sieve_directory(in_dir, out_dir = None, neighbours = 8, sieve = 10, out_type
         image_name = os.path.basename(image_path)[:-4]+"_sieved.tif"
         out_path = os.path.join(out_dir, image_name)
         out_image_paths = out_image_paths + [out_path]
-        sieve_image(image_path = image_path, 
-                    out_path = out_path, 
+        sieve_image(image_path = image_path,
+                    out_path = out_path,
                     neighbours = neighbours,
                     sieve = sieve,
                     skip_existing=skip_existing)
@@ -4363,4 +4365,3 @@ def compress_tiff(in_path, out_path):
             log.error("Error opening GeoTiff file: {}".format(in_path))
             log.error("  {}".format(e))
     return
-

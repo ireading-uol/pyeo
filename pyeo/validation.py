@@ -46,7 +46,9 @@ Function reference
 import numpy as np
 from osgeo import gdal
 import random
-import ogr, osr
+# I.R. ogr, osr now incorporated in osgeo
+# import ogr, osr
+from osgeo import osr, ogr
 
 import pyeo.coordinate_manipulation
 import pyeo.exceptions
@@ -485,4 +487,3 @@ def save_validation_maifest(out_path, class_counts, sample_size, class_sample_co
     }
     with open(out_path, "w") as fp:
         json.dump(out_dict, fp)
-

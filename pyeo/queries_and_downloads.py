@@ -36,7 +36,7 @@ USGS, for Landsat. If in doubt, use Scihub.
 
    The Copernicus Open-Access Hub is the default option for downloading sentinel-2 images. Images are downloaded in .zip
    format, and then automatically unzipped. Users are required to register with a username and password before downloading,
-   and there is a limit to no more than two concurrent downloads per username at a time. Scihub is entirely free. 
+   and there is a limit to no more than two concurrent downloads per username at a time. Scihub is entirely free.
    Older images are moved to the long-term archive and have to be requested.
 
 - AWS
@@ -75,7 +75,9 @@ import numpy as np
 from bs4 import BeautifulSoup  # I didn't really want to use BS, but I can't see a choice.
 from tempfile import TemporaryDirectory
 from xml.etree import ElementTree
-import ogr, osr
+# I.R. ogr, osr now incorporated in osgeo
+# import ogr, osr
+from osgeo import osr, ogr
 import requests
 import tenacity
 from botocore.exceptions import ClientError
@@ -101,7 +103,7 @@ except ImportError:
 
 api_url = 'https://scihub.copernicus.eu/dhus/'
 rest_url = "https://apihub.copernicus.eu/apihub/search"
-#api_url = "https://apihub.copernicus.eu/apihub/"
+# api_url = "https://apihub.copernicus.eu/apihub/"
 
 def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0, filename=None):
     # Allows for more than 10 search results by implementing pagination
@@ -154,7 +156,7 @@ def _file_api_query(user, passwd, start_date, end_date, filename, cloud=100, pro
     return(products)
 
 
-def _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0, 
+def _tile_api_query(user, passwd, tile_id, start_date, end_date, cloud=100, start_row=0,
     producttype="S2MSI1C", filename=None):
     api = SentinelAPI(user, passwd, timeout=600)
     # try 20 times to connect to the server if it is not responding before producing an error
@@ -250,7 +252,7 @@ def _sentinelsat_query(user, passwd, footprint_wkt, start_date, end_date, cloud=
     def query(*args, **kwargs):
         return api.query(*args, **kwargs)
     products = query(footprint_wkt,
-                     date=(start_date, end_date), 
+                     date=(start_date, end_date),
                      platformname="Sentinel-2",
                      cloudcoverpercentage="[0 TO {}]".format(cloud),
                      url=rest_url)
@@ -559,7 +561,7 @@ def get_landsat_api_key(conf, session):
     return session_key
 
 
-def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None', 
+def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=100, tile_id='None',
                               verbose=False, producttype=None, filename=None):
     """
     Gets all the products between start_date and end_date. Wraps sent2_query to avoid having passwords and
@@ -593,7 +595,7 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     tile_id : str
         Sentinel-2 granule ID - only required if no geojson file is given and tile-based processing
         is selected. Default: 'None' - no tile-based search but aoi-based search
- 
+
     verbose : boolean
         If True, log additional text output.
 
@@ -634,7 +636,7 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
         log.info("   product_type: {}".format(producttype))
         log.info("   file_name: {}".format(filename))
     while n == 100:
-        result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover, tile_id=tile_id, 
+        result = sent2_query(user, password, aoi_path, start_timestamp, end_timestamp, cloud=cloud_cover, tile_id=tile_id,
                              start_row=rolling_n, producttype=producttype, filename=filename)
         try:
             rolling_result
@@ -926,7 +928,7 @@ def get_granule_identifiers(safe_product_id):
     return satellite, intake_date, orbit_number, granule
 
 
-def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None, 
+def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None,
                      try_scihub_on_fail=False):
     """
     Downloads S2 imagery from AWS, google_cloud or scihub. new_data is a dict from Sentinel_2.
@@ -1012,7 +1014,7 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
                          "5",
                          "-w",
                          "5",
-                         "-W", 
+                         "-W",
                          "80",
                          "-O",
                          out_path
@@ -1026,7 +1028,7 @@ def download_s2_data(new_data, l1_dir, l2_dir, source='scihub', user=None, passw
         '''
 
 
-def download_s2_data_from_df(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None, 
+def download_s2_data_from_df(new_data, l1_dir, l2_dir, source='scihub', user=None, passwd=None,
                              try_scihub_on_fail=False):
     """
     Downloads S2 imagery from AWS, google_cloud or scihub. new_data is a dict from Sentinel_2.
@@ -1218,19 +1220,19 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     -----
     If interrupted mid-download, there will be a .incomplete file in the download folder. You might need to remove
     this for further processing.
-    Copernicus Open Access Hub no longer stores all products online for immediate retrieval. 
-    Offline products can be requested from the Long Term Archive (LTA) and should become 
-    available within 24 hours. Copernicus Open Access Hub’s quota currently permits users 
+    Copernicus Open Access Hub no longer stores all products online for immediate retrieval.
+    Offline products can be requested from the Long Term Archive (LTA) and should become
+    available within 24 hours. Copernicus Open Access Hub’s quota currently permits users
     to request an offline product every 30 minutes.
-    A product’s availability can be checked with a regular OData query by evaluating the 
+    A product’s availability can be checked with a regular OData query by evaluating the
     Online property value or by using the is_online() convenience method.
-    When trying to download an offline product with download() it will trigger its retrieval 
+    When trying to download an offline product with download() it will trigger its retrieval
     from the LTA.
-    Given a list of offline and online products, download_all() will download online products, 
-    while concurrently triggering the retrieval of offline products from the LTA. 
-    Offline products that become online while downloading will be added to the download queue. 
-    download_all() terminates when the download queue is empty, even if not all products were 
-    retrieved from the LTA. We suggest repeatedly calling download_all() to download all products, 
+    Given a list of offline and online products, download_all() will download online products,
+    while concurrently triggering the retrieval of offline products from the LTA.
+    Offline products that become online while downloading will be added to the download queue.
+    download_all() terminates when the download queue is empty, even if not all products were
+    retrieved from the LTA. We suggest repeatedly calling download_all() to download all products,
     either manually or using a third-party library, e.g. tenacity.
 
     Source: https://sentinelsat.readthedocs.io/en/latest/api_overview.html
@@ -1242,6 +1244,12 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     is_online = api.is_online(product_uuid)
     if is_online:
         log.info('Product {} is online. Starting download.'.format(product_uuid))
+
+        @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(601))
+        def download(*args, **kwargs):
+            return api.download(*args, **kwargs)
+        # I.R. To use Tenacity call download- instead of api.download
+        # prod = download(product_uuid, out_folder, max_attempts=20, checksum=True, n_concurrent_dl=2, lta_retry_delay=600)
         prod = api.download(product_uuid, out_folder)
         if not prod:
             log.error("Product {} not found. Please check manually on the Copernicus Open Data Hub.".format(product_uuid))
@@ -1253,8 +1261,8 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
             @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(601))
             def download_all(*args, **kwargs):
                 return api.download_all(*args, **kwargs)
-            downloaded, triggered, failed = api.download_all([product_uuid], out_folder, max_attempts=20, checksum=True,
-                                                             n_concurrent_dl=2, lta_retry_delay=600)
+            # I.R. To use Tenacity call download_all - instead of api.download_all
+            downloaded, triggered, failed = api.download_all([product_uuid], out_folder, max_attempts=20, checksum=True, n_concurrent_dl=2, lta_retry_delay=600)
             prod = downloaded[product_uuid]
             if len(downloaded) > 0:
                 log.info("Downloaded: {}".format(prod))
@@ -1559,4 +1567,3 @@ def get_nodata_percentage(user, passwd, products):
         else:
             log.error("Error - no metadata found for {}".format(metadata['title']))
     return(products)
-

@@ -84,9 +84,9 @@ def rolling_detection(config_path,
                     if os.path.isdir(file_to_zip):
                         shutil.rmtree(file_to_zip)
                     else:
-                        os.remove(file_to_zip)                            
+                        os.remove(file_to_zip)
                 else:
-                    log.error("Zipping failed: {}".format(zipped_file+".zip")) 
+                    log.error("Zipping failed: {}".format(zipped_file+".zip"))
         return
 
     def unzip_contents(zippath, ifstartswith=None, ending=None):
@@ -97,7 +97,7 @@ def rolling_detection(config_path,
         log.info("Unzipping {}".format(zippath))
         if not os.path.exists(dirpath):
             os.makedirs(dirpath)
-        if os.path.exists(dirpath):            
+        if os.path.exists(dirpath):
             if os.path.exists(zippath):
                 shutil.unpack_archive(
                     filename=zippath,
@@ -221,7 +221,7 @@ def rolling_detection(config_path,
         # Step 1: Create an initial cloud-free median composite from Sentinel-2 as a baseline map
         # ------------------------------------------------------------------------
 
-        #TODO: Make the download optional at the compositing stage, i.e. if do_download is not selected, skip it 
+        #TODO: Make the download optional at the compositing stage, i.e. if do_download is not selected, skip it
         #      and only call the median compositing function. Should be a piece of cake.
         # if build_composite or do_all:
         #     if do_download or do_all:
@@ -232,19 +232,19 @@ def rolling_detection(config_path,
             log.info("Creating an initial cloud-free median composite from Sentinel-2 as a baseline map")
             log.info("---------------------------------------------------------------")
             log.info("Searching for images for initial composite.")
- 
-            ''' 
+
+            '''
             # could use this as a shortcut
-            
+
             test1 = api.query(tileid = tile_id, platformname = 'Sentinel-2', processinglevel = 'Level-1C')
             test2 = api.query(tileid = tile_id, platformname = 'Sentinel-2', processinglevel = 'Level-2A')
-            
+
             '''
 
             composite_products_all = pyeo.queries_and_downloads.check_for_s2_data_by_date(root_dir,
                                                                                           composite_start_date,
                                                                                           composite_end_date,
-                                                                                          conf, 
+                                                                                          conf,
                                                                                           cloud_cover=cloud_cover,
                                                                                           tile_id=tile_id,
                                                                                           producttype=None #"S2MSI2A" or "S2MSI1C"
@@ -276,7 +276,7 @@ def rolling_detection(config_path,
             log.info("    {} L2A products".format(l2a_products.shape[0]))
 
             # during compositing stage, limit the number of images to download
-            # to avoid only downloading partially covered granules with low cloud cover (which is calculated over the whole granule, 
+            # to avoid only downloading partially covered granules with low cloud cover (which is calculated over the whole granule,
             # incl. missing values), we need to stratify our search for low cloud cover by relative orbit number
 
             rel_orbits = np.unique(l1c_products['relativeorbitnumber'])
@@ -333,8 +333,8 @@ def rolling_detection(config_path,
                             drop.append(l1c_products.index[r])
                     search_term = "*"+id.split("_")[2]+"_"+id.split("_")[3]+"_"+id.split("_")[4]+"_"+id.split("_")[5]+"*"
                     log.info("Searching on the data hub for files containing: {}.".format(search_term))
-                    matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user, 
-                                                                                       passwd=sen_pass, 
+                    matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user,
+                                                                                       passwd=sen_pass,
                                                                                        start_date=composite_start_date,
                                                                                        end_date=composite_end_date,
                                                                                        filename=search_term,
@@ -366,31 +366,31 @@ def rolling_detection(config_path,
                     l2a_products = l2a_products.append(add)
                 l2a_products = l2a_products.drop_duplicates(subset='title')
                 log.info("    {} L1C products remaining for download".format(l1c_products.shape[0]))
+                #I.R.
                 log.info("    {} L2A products remaining for download".format(l2a_products.shape[0]))
-
-                log.info("Downloading Sentinel-2 L1C products.")
                 #TODO: Need to collect the response from download_from_scihub function and check whether the download succeeded
                 if l1c_products.shape[0] > 0:
+                    log.info("Downloading Sentinel-2 L1C products.")
                     pyeo.queries_and_downloads.download_s2_data_from_df(l1c_products,
-                                                                        composite_l1_image_dir, 
-                                                                        composite_l2_image_dir, 
+                                                                        composite_l1_image_dir,
+                                                                        composite_l2_image_dir,
                                                                         download_source,
-                                                                        user=sen_user, 
-                                                                        passwd=sen_pass, 
+                                                                        user=sen_user,
+                                                                        passwd=sen_pass,
                                                                         try_scihub_on_fail=True)
                 log.info("Atmospheric correction with sen2cor.")
-                pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir, 
+                pyeo.raster_manipulation.atmospheric_correction(composite_l1_image_dir,
                                                                 composite_l2_image_dir,
                                                                 sen2cor_path,
                                                                 delete_unprocessed_image=False)
             if l2a_products.shape[0] > 0:
                 log.info("Downloading Sentinel-2 L2A products.")
                 pyeo.queries_and_downloads.download_s2_data(l2a_products.to_dict('index'),
-                                                            composite_l1_image_dir, 
-                                                            composite_l2_image_dir, 
+                                                            composite_l1_image_dir,
+                                                            composite_l2_image_dir,
                                                             download_source,
-                                                            user=sen_user, 
-                                                            passwd=sen_pass, 
+                                                            user=sen_user,
+                                                            passwd=sen_pass,
                                                             try_scihub_on_fail=True)
 
             # check for incomplete L2A downloads
@@ -405,7 +405,7 @@ def rolling_detection(config_path,
             log.info("Image download and atmospheric correction for composite is complete.")
             log.info("---------------------------------------------------------------")
 
-            if do_delete:   
+            if do_delete:
                 log.info("---------------------------------------------------------------")
                 log.info("Deleting downloaded L1C images for composite, keeping only derived L2A products")
                 log.info("---------------------------------------------------------------")
@@ -451,11 +451,11 @@ def rolling_detection(config_path,
                         # extract it if not
                         unzip_contents(os.path.join(composite_l2_image_dir, f),
                                        ifstartswith="S2", ending=".SAFE")
-                        
+
             directory = composite_l2_image_dir
             l2a_safe_file_paths = [f for f in os.listdir(directory) if f.endswith(".SAFE") \
                                    and os.path.isdir(os.path.join(directory, f))]
-            
+
             files_for_cloud_masking = []
             if len(l2a_safe_file_paths) > 0:
                 for f in l2a_safe_file_paths:
@@ -466,15 +466,15 @@ def rolling_detection(config_path,
                     else:
                         # add it to the list of files to do if it has not been cloud masked yet
                         files_for_cloud_masking = files_for_cloud_masking + [f]
-                    
+
             if len(files_for_cloud_masking) == 0:
                 log.info("No L2A images found for cloud masking. They may already have been done.")
             else:
                 pyeo.raster_manipulation.apply_scl_cloud_mask(composite_l2_image_dir,
-                                                              composite_l2_masked_image_dir, 
+                                                              composite_l2_masked_image_dir,
                                                               scl_classes=[0,1,2,3,8,9,10,11],
-                                                              buffer_size=buffer_size_composite, 
-                                                              bands=bands, 
+                                                              buffer_size=buffer_size_composite,
+                                                              bands=bands,
                                                               out_resolution=out_resolution,
                                                               haze=None,
                                                               epsg=epsg,
@@ -485,20 +485,20 @@ def rolling_detection(config_path,
                 log.info("Producing quicklooks.")
                 log.info("---------------------------------------------------------------")
                 dirs_for_quicklooks = [composite_l2_masked_image_dir]
-                for main_dir in dirs_for_quicklooks: 
-                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                for main_dir in dirs_for_quicklooks:
+                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ]
                     #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
                     if len(files) == 0:
                         log.warning("No images found in {}.".format(main_dir))
-                    else:    
+                    else:
                         for f in files:
                             quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
                             log.info("Creating quicklook: {}".format(quicklook_path))
-                            pyeo.raster_manipulation.create_quicklook(f, 
+                            pyeo.raster_manipulation.create_quicklook(f,
                                                                       quicklook_path,
-                                                                      width=512, 
-                                                                      height=512, 
-                                                                      format="PNG", 
+                                                                      width=512,
+                                                                      height=512,
+                                                                      format="PNG",
                                                                       bands=[3,2,1],
                                                                       scale_factors=[[0,2000,0,255]]
                                                                       )
@@ -521,34 +521,34 @@ def rolling_detection(config_path,
                                  and os.path.isfile(os.path.join(directory, f))]
 
             if len(masked_file_paths) > 0:
-                pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir, 
-                                                                    composite_dir, 
+                pyeo.raster_manipulation.clever_composite_directory(composite_l2_masked_image_dir,
+                                                                    composite_dir,
                                                                     chunks=chunks,
                                                                     generate_date_images=True,
                                                                     missing_data_value=0)
                 log.info("---------------------------------------------------------------")
                 log.info("Baseline composite complete.")
                 log.info("---------------------------------------------------------------")
-               
+
                 if do_quicklooks or do_all:
                     log.info("---------------------------------------------------------------")
                     log.info("Producing quicklooks.")
                     log.info("---------------------------------------------------------------")
                     dirs_for_quicklooks = [composite_dir]
-                    for main_dir in dirs_for_quicklooks: 
-                        files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                    for main_dir in dirs_for_quicklooks:
+                        files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ]
                         #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
                         if len(files) == 0:
                             log.warning("No images found in {}.".format(main_dir))
-                        else:    
+                        else:
                             for f in files:
                                 quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
                                 log.info("Creating quicklook: {}".format(quicklook_path))
-                                pyeo.raster_manipulation.create_quicklook(f, 
+                                pyeo.raster_manipulation.create_quicklook(f,
                                                                           quicklook_path,
-                                                                          width=512, 
-                                                                          height=512, 
-                                                                          format="PNG", 
+                                                                          width=512,
+                                                                          height=512,
+                                                                          format="PNG",
                                                                           bands=[3,2,1],
                                                                           scale_factors=[[0,2000,0,255]]
                                                                           )
@@ -604,7 +604,7 @@ def rolling_detection(config_path,
             products_all = pyeo.queries_and_downloads.check_for_s2_data_by_date(root_dir,
                                                                                start_date,
                                                                                end_date,
-                                                                               conf, 
+                                                                               conf,
                                                                                cloud_cover=cloud_cover,
                                                                                tile_id=tile_id,
                                                                                producttype=None #"S2MSI2A" or "S2MSI1C"
@@ -645,8 +645,8 @@ def rolling_detection(config_path,
                     id = l1c_products.iloc[r,:]['title']
                     search_term = "*"+id.split("_")[2]+"_"+id.split("_")[3]+"_"+id.split("_")[4]+"_"+id.split("_")[5]+"*"
                     log.info("Search term: {}.".format(search_term))
-                    matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user, 
-                                                                                       passwd=sen_pass, 
+                    matching_l2a_products = pyeo.queries_and_downloads._file_api_query(user=sen_user,
+                                                                                       passwd=sen_pass,
                                                                                        start_date=start_date,
                                                                                        end_date=end_date,
                                                                                        filename=search_term,
@@ -679,7 +679,7 @@ def rolling_detection(config_path,
                 if len(add) > 0:
                     if do_dev:
                         add = pd.DataFrame(add)
-                        log.info("Types for concatenation: {}, {}".format(type(l2a_products), type(add)))    
+                        log.info("Types for concatenation: {}, {}".format(type(l2a_products), type(add)))
                         l2a_products = pd.concat([l2a_products, add])
                         #TODO: test the above fix for:
                         # pyeo/pyeo/apps/change_detection/tile_based_change_detection_from_cover_maps.py:456: FutureWarning: The frame.append method is deprecated and will be removed from pandas in a future version. Use pandas.concat instead.
@@ -687,29 +687,31 @@ def rolling_detection(config_path,
                         l2a_products = l2a_products.append(add)
 
                 log.info("    {} L1C products remaining for download".format(l1c_products.shape[0]))
-                log.info("    {} L2A products remaining for download".format(l2a_products.shape[0]))
                 l2a_products = l2a_products.drop_duplicates(subset='title')
-                log.info("Downloading Sentinel-2 L1C products.")
-                pyeo.queries_and_downloads.download_s2_data_from_df(l1c_products,
-                                                            l1_image_dir, 
-                                                            l2_image_dir, 
-                                                            download_source,
-                                                            user=sen_user, 
-                                                            passwd=sen_pass, 
-                                                            try_scihub_on_fail=True)
-                log.info("Atmospheric correction with sen2cor.")
-                pyeo.raster_manipulation.atmospheric_correction(l1_image_dir, 
+                #I.R.
+                log.info("    {} L2A products remaining for download".format(l2a_products.shape[0]))
+                if (l1c_products.shape[0] >0):
+                    log.info("Downloading Sentinel-2 L1C products.")
+                    pyeo.queries_and_downloads.download_s2_data_from_df(l1c_products,
+                                                                l1_image_dir,
                                                                 l2_image_dir,
-                                                                sen2cor_path,
-                                                                delete_unprocessed_image=False)
+                                                                download_source,
+                                                                user=sen_user,
+                                                                passwd=sen_pass,
+                                                                try_scihub_on_fail=True)
+                    log.info("Atmospheric correction with sen2cor.")
+                    pyeo.raster_manipulation.atmospheric_correction(l1_image_dir,
+                                                                    l2_image_dir,
+                                                                    sen2cor_path,
+                                                                    delete_unprocessed_image=False)
             if l2a_products.shape[0] > 0:
                 log.info("Downloading Sentinel-2 L2A products.")
                 pyeo.queries_and_downloads.download_s2_data(l2a_products.to_dict('index'),
-                                                            l1_image_dir, 
-                                                            l2_image_dir, 
+                                                            l1_image_dir,
+                                                            l2_image_dir,
                                                             download_source,
-                                                            user=sen_user, 
-                                                            passwd=sen_pass, 
+                                                            user=sen_user,
+                                                            passwd=sen_pass,
                                                             try_scihub_on_fail=True)
 
             # check for incomplete L2A downloads and remove them
@@ -753,11 +755,11 @@ def rolling_detection(config_path,
             #log.info("  l2_image_dir: {}".format(l2_image_dir))
             #log.info("  l2_masked_image_dir: {}".format(l2_masked_image_dir))
             #log.info("  bands: {}".format(bands))
-            pyeo.raster_manipulation.apply_scl_cloud_mask(l2_image_dir, 
-                                                          l2_masked_image_dir, 
+            pyeo.raster_manipulation.apply_scl_cloud_mask(l2_image_dir,
+                                                          l2_masked_image_dir,
                                                           scl_classes=[0,1,2,3,8,9,10,11],
-                                                          buffer_size=buffer_size, 
-                                                          bands=bands, 
+                                                          buffer_size=buffer_size,
+                                                          bands=bands,
                                                           out_resolution=out_resolution,
                                                           haze=None,
                                                           epsg=epsg,
@@ -772,20 +774,20 @@ def rolling_detection(config_path,
                 log.info("Producing quicklooks.")
                 log.info("---------------------------------------------------------------")
                 dirs_for_quicklooks = [l2_masked_image_dir]
-                for main_dir in dirs_for_quicklooks: 
-                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                for main_dir in dirs_for_quicklooks:
+                    files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ]
                     #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
                     if len(files) == 0:
                         log.warning("No images found in {}.".format(main_dir))
-                    else:    
+                    else:
                         for f in files:
                             quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
                             log.info("Creating quicklook: {}".format(quicklook_path))
-                            pyeo.raster_manipulation.create_quicklook(f, 
+                            pyeo.raster_manipulation.create_quicklook(f,
                                                                       quicklook_path,
-                                                                      width=512, 
-                                                                      height=512, 
-                                                                      format="PNG", 
+                                                                      width=512,
+                                                                      height=512,
+                                                                      format="PNG",
                                                                       bands=[3,2,1],
                                                                       scale_factors=[[0,2000,0,255]]
                                                                       )
@@ -822,21 +824,21 @@ def rolling_detection(config_path,
             log.info("---------------------------------------------------------------")
             log.info("Model used: {}".format(model_path))
             if skip_existing:
-                log.info("Skipping existing classification images if found.") 
+                log.info("Skipping existing classification images if found.")
             pyeo.classification.classify_directory(composite_dir,
                                                    model_path,
                                                    categorised_image_dir,
-                                                   prob_out_dir = None, 
-                                                   apply_mask=False, 
-                                                   out_type="GTiff", 
+                                                   prob_out_dir = None,
+                                                   apply_mask=False,
+                                                   out_type="GTiff",
                                                    chunks=chunks,
                                                    skip_existing=skip_existing)
             pyeo.classification.classify_directory(l2_masked_image_dir,
                                                    model_path,
                                                    categorised_image_dir,
-                                                   prob_out_dir = None, 
-                                                   apply_mask=False, 
-                                                   out_type="GTiff", 
+                                                   prob_out_dir = None,
+                                                   apply_mask=False,
+                                                   out_type="GTiff",
                                                    chunks=chunks,
                                                    skip_existing=skip_existing)
 
@@ -857,26 +859,26 @@ def rolling_detection(config_path,
                 log.info("Producing quicklooks.")
                 log.info("---------------------------------------------------------------")
                 dirs_for_quicklooks = [categorised_image_dir]
-                for main_dir in dirs_for_quicklooks: 
-                    #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ] 
+                for main_dir in dirs_for_quicklooks:
+                    #files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") ]
                     files = [ f.path for f in os.scandir(main_dir) if f.is_file() and os.path.basename(f).endswith(".tif") and "class" in os.path.basename(f) ] # do classification images only
                     if len(files) == 0:
                         log.warning("No images found in {}.".format(main_dir))
-                    else:    
+                    else:
                         for f in files:
                             quicklook_path = os.path.join(quicklook_dir, os.path.basename(f).split(".")[0]+".png")
                             log.info("Creating quicklook: {}".format(quicklook_path))
-                            pyeo.raster_manipulation.create_quicklook(f, 
+                            pyeo.raster_manipulation.create_quicklook(f,
                                                                       quicklook_path,
-                                                                      width=512, 
-                                                                      height=512, 
+                                                                      width=512,
+                                                                      height=512,
                                                                       format="PNG"
                                                                       )
             log.info("Quicklooks complete.")
 
 
         # ------------------------------------------------------------------------
-        # Step 4: Pair up the class images with the composite baseline map 
+        # Step 4: Pair up the class images with the composite baseline map
         # and identify all pixels with the change between groups of classes of interest.
         # Optionally applies a sieve filter to the class images if specified in the ini file.
         # Confirms detected changes by NDVI differencing.
@@ -897,7 +899,7 @@ def rolling_detection(config_path,
                                                                         out_dir = sieved_image_dir,
                                                                         neighbours = 8,
                                                                         sieve = sieve,
-                                                                        out_type="GTiff", 
+                                                                        out_type="GTiff",
                                                                         skip_existing=skip_existing)
                 # if sieve was chosen, work with the sieved class images
                 class_image_dir = sieved_image_dir
@@ -932,7 +934,7 @@ def rolling_detection(config_path,
                              "check that the earliest dated image in your images/merged folder is later than the earliest"
                              " dated image in your composite/ folder.")
                 sys.exit(1)
-            
+
             latest_class_composite_path = os.path.join(
                                                        class_image_dir, \
                                                        [ f.path for f in os.scandir(class_image_dir) if f.is_file() \
@@ -972,7 +974,7 @@ def rolling_detection(config_path,
                         log.info("Report timestamp {}".format(report_timestamp.strftime("%Y%m%dT%H%M%S")))
                         log.info(" is earlier than {}".format(after_timestamp.strftime("%Y%m%dT%H%M%S")))
                         log.info("Updating its file name to: {}".format(output_product))
-                        os.rename(output_product_existing, output_product) 
+                        os.rename(output_product_existing, output_product)
 
             # find change patterns in the stack of classification images
             for index, image in enumerate(class_image_paths):
@@ -992,11 +994,11 @@ def rolling_detection(config_path,
                     # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
                     #TODO: In change_from_class_maps(), add a flag (e.g. -1) whether a pixel was a cloud in the later image.
                     # Applying check whether dNDVI < -0.2, i.e. greenness has decreased over changed areas
-                
+
                     log.info("Includes a rolling update of the report image product based on each new change detection image.")
                     pyeo.raster_manipulation.__change_from_class_maps(latest_class_composite_path,
                                                                 image,
-                                                                change_raster, 
+                                                                change_raster,
                                                                 change_from = from_classes,
                                                                 change_to = to_classes,
                                                                 report_path = output_product,
@@ -1010,7 +1012,7 @@ def rolling_detection(config_path,
                 else:
                     pyeo.raster_manipulation.change_from_class_maps(latest_class_composite_path,
                                                                 image,
-                                                                change_raster, 
+                                                                change_raster,
                                                                 change_from = from_classes,
                                                                 change_to = to_classes,
                                                                 skip_existing = skip_existing
@@ -1183,7 +1185,7 @@ def rolling_detection(config_path,
                     [image_name for image_name in os.listdir(l2_masked_image_dir) if image_name.endswith(".tif")],
                     recent_first=False
                 )
-            
+
             log.info("Updating most recent composite with new imagery over detected changed areas.")
             for categorised_image in categorised_images:
                 # Find corresponding L2A file
@@ -1206,8 +1208,8 @@ def rolling_detection(config_path,
                     log.info("Creating mask file from categorised image {} for class: {}".format(os.path.join(categorised_image_dir, categorised_image), class_of_interest))
                     mask_path = os.path.join(td, categorised_image.split(sep=".")[0]+".msk")
                     log.info("  at {}".format(mask_path))
-                    pyeo.raster_manipulation.create_mask_from_class_map(os.path.join(categorised_image_dir, categorised_image), 
-                                                                        mask_path, [class_of_interest], buffer_size=0, out_resolution=None) 
+                    pyeo.raster_manipulation.create_mask_from_class_map(os.path.join(categorised_image_dir, categorised_image),
+                                                                        mask_path, [class_of_interest], buffer_size=0, out_resolution=None)
                     masked_image_path = os.path.join(td, categorised_image.split(sep=".")[0]+"_change.tif")
                     pyeo.raster_manipulation.apply_mask_to_image(mask_path, l2a_image, masked_image_path)
                     new_composite_path = os.path.join(composite_dir, "composite_{}.tif".format(
@@ -1219,8 +1221,8 @@ def rolling_detection(config_path,
                     #TODO generate_date_image=True currently produces a type error
                     pyeo.raster_manipulation.update_composite_with_images(
                                                                          latest_composite_path,
-                                                                         [masked_image_path], 
-                                                                         new_composite_path,  
+                                                                         [masked_image_path],
+                                                                         new_composite_path,
                                                                          generate_date_image=False,
                                                                          missing=0
                                                                          )
@@ -1230,7 +1232,7 @@ def rolling_detection(config_path,
         log.info("---------------------------------------------------------------")
         log.info("---                  PROCESSING END                         ---")
         log.info("---------------------------------------------------------------")
-    
+
     except Exception:
         log.exception("Fatal error in rolling_s2_composite chain")
 
@@ -1286,5 +1288,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rolling_detection(**vars(args))
-
-
