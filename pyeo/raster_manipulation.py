@@ -3212,7 +3212,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
     if not os.path.exists(report_path):
         log.info("Report file does not exist yet and will be created: {}".format(report_path))
         new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
-        report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=3, datatype=gdal.GDT_Int32)
+        report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=3, datatype=gdal.GDT_UInt16) # changed from gdal.GDT_Int32
         new_class_image = None
         report_image = None
     if not os.path.exists(report_path):
@@ -3238,7 +3238,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             log.info("added mask path {}".format(added_mask_path))
             new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
             new_class_array = new_class_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
-            change_image = create_matching_dataset(new_class_image, change_raster, format='GTiff', bands=1, datatype=gdal.GDT_Int32)
+            change_image = create_matching_dataset(new_class_image, change_raster, format='GTiff', bands=1, datatype=gdal.GDT_UInt16) # changed from gdal.GDT_Int32
             change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Write).squeeze()
             added_mask = gdal.Open(added_mask_path, gdal.GA_ReadOnly)
             added_mask_array = added_mask.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
@@ -3352,6 +3352,8 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         change_image = gdal.Open(change_raster, gdal.GA_ReadOnly)
         change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
         report_image = gdal.Open(report_path, gdal.GA_Update)
+        # TODO: use BIGTIFF=IF_NEEDED when creating tiff files
+
         out_report_array = report_image.GetVirtualMemArray(eAccess=gdal.GA_Update).squeeze()
         reference_projection = report_image.GetProjection()
         projection = change_image.GetProjection()
