@@ -3146,7 +3146,6 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
     UNTESTED DEVELOPMENT VERSION:
                     # This function looks for changes from class 'change_from' in the composite to any of the 'change_to_classes'
                     # in the change images. Pixel values are the acquisition date of the detected change of interest or zero.
-                    #TODO: In change_from_class_maps(), add a flag (e.g. -1) whether a pixel was a cloud in the later image.
                     # Update report layer as we go along. Iterative updating gets us out of the pattern search problem.
 
 
@@ -3236,6 +3235,8 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             # combine masks by finding pixels that are 1 in the old mask and 1 in the new mask
             added_mask_path = add_masks([from_class_mask_path, to_class_mask_path], os.path.join(td, "combined.msk"), geometry_func="intersect")
             log.info("added mask path {}".format(added_mask_path))
+            old_class_image = gdal.Open(old_class_path, gdal.GA_ReadOnly)
+            old_class_array = old_class_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
             new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
             new_class_array = new_class_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
             change_image = create_matching_dataset(new_class_image, change_raster, format='GTiff', bands=1, datatype=gdal.GDT_UInt16) # changed from gdal.GDT_Int32
@@ -3251,6 +3252,8 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             # replace all pixels != 2 with 0 and all pixels == 2 with the new acquisition date
             change_array[np.where(added_mask_array == 2)] = date
             change_array[np.where(added_mask_array != 2)] = 0
+            # set clouds and missing values in old class image to -1 in the change layer
+            change_array[np.where(old_class_array == 0)] = -1
             # set clouds and missing values in latest class image to -1 in the change layer
             change_array[np.where(new_class_array == 0)] = -1
             if viband1 is not None and viband2 is not None and threshold is not None:
@@ -3308,7 +3311,9 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
                 else:
                     log.error("Did not find an old satellite image with name pattern: {}".format(old_timestamp.strftime("%Y%m%dT%H%M%S")))
                     log.error("Skipping vegetation index calculation and confirmation of change detections.")
-            # save change layer
+            # save change layer and close files
+            old_class_array = None
+            old_class_image = None
             new_class_array = None
             new_class_image = None
             added_mask_array = None
@@ -3316,14 +3321,14 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             change_array = None
             change_image = None
         else:
-            log.info("Change raster file already exists: {}. Skipping change raster creation.".format(change_raster))
+            log.info("Change raster file already exists: {}. Skipping change raster creation. Remove --skip option when running this script to update an existing report file.".format(change_raster))
         # within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
         # ensure that the date of the new change layer is AFTER the report file was last updated
         baseline_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[0]
         report_last_updated_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[1]
         new_changes_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(change_raster))[1]
         # pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
-        if report_last_updated_timestamp > new_changes_timestamp:
+        if report_last_updated_timestamp >= new_changes_timestamp:
             log.warning("Date of the new change map is not recent enough to update the current report image product: ")
             log.warning("  report image: {}".format(report_path))
             log.warning("  last updated: {}".format(report_last_updated_timestamp))
@@ -3337,22 +3342,27 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             log.info("  last updated: {}".format(report_last_updated_timestamp))
             log.info("  change image:  {}".format(change_raster))
             log.info("  updated:      {}".format(new_changes_timestamp))
-        #TODO: update name of report_path with new_changes_timestamp
+        # update name of report_path with new_changes_timestamp
         tile_id = os.path.basename(report_path).split("_")[2]
-        old_report_path = report_path
+        old_report_path = str(report_path) # str() creates a copy of the string
         report_path = os.path.join(os.path.dirname(report_path),
                                        "report_{}_{}_{}.tif".format(
                                        baseline_timestamp.strftime("%Y%m%dT%H%M%S"),
                                        tile_id,
-                                       report_last_updated_timestamp.strftime("%Y%m%dT%H%M%S"))
+                                       new_changes_timestamp.strftime("%Y%m%dT%H%M%S"))
                                        )
-        shutil.move(old_report_path, report_path)
+        log.info("  updated report file:      {}".format(report_path))
+        shutil.copy(old_report_path, report_path)
+        report_archive_path = os.path.join(os.path.dirname(old_report_path),
+                                           "archived_"+os.path.basename(old_report_path))
+        log.info("  archived report file:      {}".format(report_archive_path))
+        os.rename(old_report_path, report_archive_path)
         
         #now update the report file layers
         change_image = gdal.Open(change_raster, gdal.GA_ReadOnly)
         change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
         report_image = gdal.Open(report_path, gdal.GA_Update)
-        # TODO: use BIGTIFF=IF_NEEDED when creating tiff files
+        # use BIGTIFF=IF_NEEDED when creating tiff files
 
         out_report_array = report_image.GetVirtualMemArray(eAccess=gdal.GA_Update).squeeze()
         reference_projection = report_image.GetProjection()
@@ -3381,7 +3391,7 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         # increase counter if a change was detected
         locs = ( change_array > 0 )
         out_report_array[2, locs] = out_report_array[2, locs] + 1
-        # reset the counter if no change was detected
+        # decrease the counter if no change was detected
         locs = ( change_array == 0 )
         out_report_array[2, locs] = out_report_array[2, locs] - 1
         change_array = None

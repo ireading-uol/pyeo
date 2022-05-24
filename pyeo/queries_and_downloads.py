@@ -737,6 +737,9 @@ def filter_non_matching_s2_data(query_output):
     out_set = {}
     for key, image_set in granule_date_groups.items():
         # if sum(1 for image in image_set if get_query_level(image) == "Level-2A") <= 2:
+f***
+
+
         # list(filter(lambda x: get_query_level(x) == "Level-2A", image_set)).sort(key=get_query_processing_time)[0].pop()
         if (sum(1 for image in image_set if get_query_level(image) == "Level-2A") == 1
                 and sum(1 for image in image_set if get_query_level(image) == "Level-1C") == 1):
@@ -1242,9 +1245,13 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     is_online = api.is_online(product_uuid)
     if is_online:
         log.info('Product {} is online. Starting download.'.format(product_uuid))
-        prod = api.download(product_uuid, out_folder)
-        if not prod:
-            log.error("Product {} not found. Please check manually on the Copernicus Open Data Hub.".format(product_uuid))
+        # *** The following api.download function can produce checksum errors, which need to be intercepted
+        try:
+            prod = api.download(product_uuid, out_folder)
+            return 0
+        except Exception as e:
+            log.error("Download error for product: {}".format(product_uuid))
+            log.error("Exception: {}".format(e))
             return 1
     else:
         log.info("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
