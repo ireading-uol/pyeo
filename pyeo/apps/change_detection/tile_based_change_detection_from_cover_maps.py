@@ -16,7 +16,7 @@ An app for providing continuous change detection based on classification of fore
  Step 5: Update the baseline composite with the reflectance values of only the changed pixels. Update last_date of the baseline composite.
 
  Step 6: Create quicklooks.
-
+.
  """
 import shutil
 import sys
