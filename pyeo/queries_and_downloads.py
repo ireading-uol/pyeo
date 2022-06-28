@@ -105,7 +105,9 @@ api_url = 'https://scihub.copernicus.eu/dhus/'
 rest_url = "https://apihub.copernicus.eu/apihub/search"
 # api_url = "https://apihub.copernicus.eu/apihub/"
 
-def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0, filename=None):
+#I.R.
+# def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0, filename=None):
+def _rest_query(user, passwd, footprint_wkt, start_date, end_date, cloud=100, start_row=0, producttype=None, filename=None):
     # Allows for more than 10 search results by implementing pagination
     # https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI?redirectedfrom=SciHubUserGuide.6OpenSearchAPI
     # Results sets over the maximum can be obtained through paging of from different start values.
@@ -620,7 +622,9 @@ def check_for_s2_data_by_date(aoi_path, start_date, end_date, conf, cloud_cover=
     if tile_id == "None":
         #TODO: check that a valid GeoJSON file path is provided
         log.info("Sending Sentinel-2 queries for GeoJSON footprint:")
-        log.info("   footprint: {}".format(footprint))
+        # I.R.
+        # log.info("   footprint: {}".format(footprint))
+        log.info("   footprint: {}".format(aoi_path))
         log.info("   start_date: {}".format(start_date))
         log.info("   end_date: {}".format(end_date))
         log.info("   cloud_cover: {}".format(cloud_cover))
@@ -1244,16 +1248,25 @@ def download_from_scihub(product_uuid, out_folder, user, passwd):
     is_online = api.is_online(product_uuid)
     if is_online:
         log.info('Product {} is online. Starting download.'.format(product_uuid))
-
-        @tenacity.retry(stop=tenacity.stop_after_attempt(20), wait=tenacity.wait_fixed(601))
-        def download(*args, **kwargs):
-            return api.download(*args, **kwargs)
-        # I.R. To use Tenacity call download- instead of api.download
-        # prod = download(product_uuid, out_folder, max_attempts=20, checksum=True, n_concurrent_dl=2, lta_retry_delay=600)
-        prod = api.download(product_uuid, out_folder)
-        if not prod:
-            log.error("Product {} not found. Please check manually on the Copernicus Open Data Hub.".format(product_uuid))
-            return 1
+        # I.R. START Try/Except test added to skip download and so stop blocking when a file won't download after multiple retries
+        try:
+            @tenacity.retry(stop=tenacity.stop_after_attempt(5), wait=tenacity.wait_fixed(601))
+            def download(*args, **kwargs):
+                log.info('I.R. Tenacity will retry download up to 5 times.')
+                return api.download(*args, **kwargs)
+            # I.R. To use Tenacity call download- instead of api.download
+            # prod = download(product_uuid, out_folder, max_attempts=20, checksum=True, n_concurrent_dl=2, lta_retry_delay=600)
+            prod = download(product_uuid, out_folder)
+            # prod = api.download(product_uuid, out_folder)
+            if not prod:
+                log.error("Product {} not found. Please check manually on the Copernicus Open Data Hub.".format(product_uuid))
+                return 1
+        except:
+            log.info("\n-------------------------------------------------------------")
+            log.warning("I.R. Exception Triggered: Download Failed despite multiple retries - skipping file: {}".format(product_uuid))
+            log.info("-------------------------------------------------------------\n")
+            return 1        
+        # I.R. END 
     else:
         log.info("Product {} is not online. Triggering retrieval from long-term archive.".format(product_uuid))
         log.info("Remember: \'Patience is bitter, but its fruit is sweet.\' (Jean-Jacques Rousseau)")

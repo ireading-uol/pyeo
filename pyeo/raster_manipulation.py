@@ -2379,7 +2379,123 @@ def apply_scl_cloud_mask(l2_dir, out_dir, scl_classes, buffer_size=0, bands=["B0
                         shutil.move(masked_file, out_path)
     return
 
+# Added I.R. 20220607 START
+def apply_processing_baseline_0400_offset_correction_to_tiff_file_directory(in_tif_directory,
+                                                                            out_tif_directory,
+                                                                            bands_to_offset_labels = ("B02", "B03", "B04", "B08"),
+                                                                            bands_to_offset_index = [0, 1, 2, 3],
+                                                                            BOA_ADD_OFFSET = -1000,
+                                                                            backup_flag = False):
+    """
+    Offsets data within selected bands from a directory of stacked raster files
+    Overwrites original file - option to save a backup copy.
+    Added I.R. 20220607
 
+    Parameters
+    ----------
+    in_tif_directory : str
+        Path to the input (and output) directory of tif raster files
+    out_tif_directory : str
+        Path to the output directory of tif raster files
+    bands_to_offset_labels : list of string
+        List of bands to offset
+    bands_to_offset_index : list of int
+        List of indices of bands to offset within the tif image
+    BOA_ADD_OFFSET : int
+        Required offset per band (from xml information within L2A SAFE file directory)
+    backup_flag : True/False
+        If True leaves unoffset images with .backup extension in tif_directory
+
+    Returns
+    -------
+    out_tif_directory : str
+        The path to the output directory
+
+    ToDo:
+    -------
+    # Check out_tif_directory directory exists and report an error or create it
+    # Force generated dtype to uint16 to save time and storage? Compatible with classifier?
+    # Generate bands_to_offset_index from comparison of bands_to_offset labels in band.description
+    # Read individual BOA_ADD_OFFSET value for each band from xml information in SAFE file root
+    # Use 'with TemporaryDirectory' pattern - Overwrite existing files with offset files by 'move'
+    # Work out why offset files are larger (2GB from ~1GB)
+
+    """
+    print(f'apply_processing_baseline_0400_offset_correction_to_tiff_file_directory() running on: {in_tif_directory}')
+    log.info(f'apply_processing_baseline_0400_offset_correction_to_tiff_file_directory() running on: {in_tif_directory}')
+
+    def get_processing_baseline(safe_path):
+        return safe_path[28:32]
+
+    def set_processing_baseline(safe_path, new_baseline):
+        new_safe_path = safe_path[:28] + new_baseline + safe_path[32:]
+        return new_safe_path
+
+    image_files = [f for f in os.listdir(in_tif_directory) if f.endswith('.tif') or f.endswith('.tiff')]
+    for f in image_files:
+        print(f'File: {f}, Baseline: {get_processing_baseline(f)}')
+        log.info(f'File: {f}, Baseline: {get_processing_baseline(f)}')
+        if get_processing_baseline(f) == 'A400':
+            print(f'Offset already applied - file marked as: {get_processing_baseline(f)}')
+            log.info(f'Offset already applied - file marked as: {get_processing_baseline(f)}')
+        if get_processing_baseline(f) == '0400':
+            in_raster_path = os.path.join(in_tif_directory, f)
+            print(f'Offsetting file: {f}')
+            log.info(f'Offsetting file: {f}')
+            print(f'in_raster_path: {in_raster_path}')
+            # log.info(f'in_raster_path: {in_raster_path}')
+            # Define temporary file destination for output
+            out_temporary_raster_path = os.path.join(out_tif_directory, os.path.basename(f).split(".")[0] + '_offset_temp.tif')
+            print(f'out_temporary_raster_path: {out_temporary_raster_path}')
+            log.info(f'out_temporary_raster_path: {out_temporary_raster_path}')
+            # Open data set
+            in_raster_ds = gdal.Open(in_raster_path, gdal.GA_Update)
+            raster_band_count = in_raster_ds.RasterCount
+            in_raster_array = in_raster_ds.GetVirtualMemArray()
+            out_temporary_raster_ds = pyeo.raster_manipulation.create_matching_dataset(in_raster_ds, out_temporary_raster_path, bands=raster_band_count)
+            out_temporary_raster_array = out_temporary_raster_ds.GetVirtualMemArray(eAccess=gdal.GA_Update)
+            # out_temporary_raster_array[...] = in_raster_array[bands_to_offset_index, :,:] + BOA_ADD_OFFSET
+
+            print(f'in_raster_array dtype: {in_raster_array.dtype}')
+            log.info(f'in_raster_array dtype: {in_raster_array.dtype}')
+            dtype_max = 10000  # np.iinfo(in_raster_array.dtype).max # upper bound for range clipping - should be > any likely pixel value
+            print(f'in_raster_array dtype_max used: {dtype_max}')
+            log.info(f'in_raster_array dtype_max used: {dtype_max}')
+
+            # Simple offset of all image bands
+            out_temporary_raster_array[...] = np.clip(in_raster_array[bands_to_offset_index, :,:] , (-1 * BOA_ADD_OFFSET), dtype_max) + BOA_ADD_OFFSET
+
+            # Untested: Improvement to offset just selected bands by label - for band specific offsetting if required
+            # out_raster_array[...] = in_raster_array[...]  # Copy over all data
+            # for band_index in raster_band_count:
+            #     band_in = in_raster_ds.GetRasterBand(band_index+1)
+            #     band_out = out_raster_ds.GetRasterBand(band_index+1)
+            #     band_out.SetDescription(band_in.GetDesciption())
+            #     if (band_in.GetDesciption() in bands_to_offset_labels):
+            #         out_raster_array[band_index, :, :] = np.clip(in_raster_array[band_index, :,:] , (-1 * BOA_ADD_OFFSET), dtype_max) + BOA_ADD_OFFSET
+
+            # Deallocate to force write of generated file to disk by OS
+            out_temporary_raster_array = None
+            in_raster_array = None
+            out_temporary_raster_ds = None
+            in_raster_ds = None
+
+            # Backup original .tif file to .backup file (subsequent algorithm stages should filter for only .tif or .tiff)
+            if (backup_flag == True):
+                shutil.move(in_raster_path, in_raster_path.split(".")[0] + '.backup')
+            out_raster_path = os.path.join(out_tif_directory, f)
+            # Intended to overwrite source file when in_tif_directory = out_tif_directory
+            # If in_tif_directory == out_tif_directory then overwrites original .tif file with offset file so that next stage of ForestMind algorithm can run
+            shutil.move(out_temporary_raster_path, out_raster_path)
+            # Rename file with processing baseline code modified from 0400 to A400 to avoid multiple runs of pipeline leading to multiple offsets being applied
+            out_raster_path_rename = os.path.join(out_tif_directory, set_processing_baseline(f, 'A400'))
+            shutil.move(out_raster_path, out_raster_path_rename)
+
+    print('Offsetting Finished')
+    log.info('Offsetting Finished')
+    return out_tif_directory
+
+# Added I.R. 20220607 END
 
 
 def preprocess_landsat_images(image_dir, out_image_path, new_projection = None, bands_to_stack=("B2","B3","B4")):
@@ -2483,6 +2599,76 @@ def stack_sentinel_2_bands(safe_dir, out_image_path, bands=("B02", "B03", "B04",
                 new_band_paths.append(band_path)
 
         stack_images(new_band_paths, out_image_path, geometry_mode="intersect")
+
+    # # I.R. 20220529 START
+    # # if processing baseline = 0400 move every images offset_dir and offset by -1000 to compensate for introduction of negative radiometric offset
+    # ## https://sentinels.copernicus.eu/web/sentinel/-/copernicus-sentinel-2-major-products-upgrade-upcoming
+    # ## Value of offset is currently -1000 for all bands but should be read from <BOA_ADD_OFFSET_VALUES_LIST> for each bandv in xml file at base of SAFE directories
+    # BOA_ADD_OFFSET = -1000
+    # offset_band_paths = []
+    #
+    # processing_baseline = os.path.basename(safe_dir)[28:32]
+    # # log.info(f'I.R.: safe_dir: {safe_dir}, basename: {os.path.basename(safe_dir)}, processing_baseline: {processing_baseline}')
+    # print(f'I.R.: safe_dir: {safe_dir}, basename: {os.path.basename(safe_dir)}, processing_baseline: {processing_baseline}')
+    # with TemporaryDirectory(dir=os.getcwd()) as offset_dir:
+    #     offset_dir = os.getcwd()  # Temporary override of destination directory for intermediate files fro debugging purposes
+    #     if processing_baseline == '0400':
+    #         # log.info(f'I.R.: Offsetting to compensate for negative radiometric offset for processing baseline: {processing_baseline}')
+    #         print(f'I.R.: Offsetting to compensate for negative radiometric offset for processing baseline: {processing_baseline}')
+    #         for band_path in new_band_paths:
+    #             offset_path = os.path.join(offset_dir, os.path.basename(band_path))
+    #             # shutil.copy(band_path, offset_path)
+    #             # TODO TEST & DEBUG: Insert GDAL operation to open band image at offset_path for update and add an offset of -1000 here
+    #             image_band_ds = gdal.Open(offset_path, gdal.GA_Update)
+    #             # image_array = image_band.GetVirtualMemArray(eAccess=gdal.GA_Update)
+    #             # image_ds = gdal.Open(offset_path, gdal.GF_Write)
+    #             # image_band = image_ds.GetRasterBand(1)
+    #             image_band_array = image_band_ds.GetVirtualMemArray(eAccess=gdal.GA_ReadOnly) # (eAccess=gdal.GA_ReadOnly)  #(eAccess=gdal.GF_Write)
+    #             # image_array = image_band.ReadAsArray()
+    #             # log.info(f'I.R.: image_array: {type(image_array)}, {image_array.shape}, , {image_array.dtype}')
+    #             print(f'I.R.: image_band_array: {type(image_band_array)}, shape: {image_band_array.shape}, dtype: {image_band_array.dtype}, min: {np.min(image_band_array)}, max: {np.max(image_band_array)}')
+    #             print(image_band_array[0][0:10])
+    #             image_band_array_offset = np.clip(image_band_array , (-1 * BOA_ADD_OFFSET), np.iinfo(image_band_array.dtype).max)
+    #             image_band_array_offset = image_band_array_offset + BOA_ADD_OFFSET
+    #             # image_array = image_array.astype(uint16)
+    #             # image_array = image_array + 1
+    #             print(f'I.R.: image_band_array_offset: {type(image_band_array_offset)}, shape: {image_band_array_offset.shape}, dtype: {image_band_array_offset.dtype}, min: {np.min(image_band_array_offset)}, max: {np.max(image_band_array_offset)}')
+    #             print(image_band_array_offset[0][0:10])
+    #
+    #
+    #             offset_ds = create_matching_dataset(image_band_ds, offset_path)
+    #             offset_array = offset_ds.GetVirtualMemArray(eAccess=gdal.GA_Update)
+    #             np.copyto(offset_array, image_band_array_offset.astype(np.uint16))
+    #
+    #             # np.copyto(image_band_array, image_band_array_offset.astype(np.uint16))
+    #
+    #             # offset_array = image_band_array
+    #             # out_array = out_raster.GetVirtualMemArray(eAccess=gdal.GA_Update)
+    #
+    #             # image_band.WriteArray(image_array)
+    #             # deallocate the dataset to force it to be flushed (updated) to disk
+    #             # image_array = None
+    #             # image_band = None
+    #             offest_array = None
+    #             offset_ds = None
+    #             image_band_array = None
+    #             image_band_ds = None
+    #
+    #             offset_band_paths.append(offset_path)
+    #     else:
+    #         offset_band_paths = new_band_paths
+    #
+    #     # log.info(f'I.R.: resample_dir: {resample_dir}')
+    #     print(f'I.R.: resample_dir: {resample_dir}')
+    #     # log.info(f'I.R.: offset_dir: {offset_dir}')
+    #     print(f'I.R.: offset_dir: {offset_dir}')
+    #     for i in offset_band_paths:
+    #         print(f'I.R. offset_band_path: {i}')
+    #
+    #     # stack_images(new_band_paths, out_image_path, geometry_mode="intersect")
+    #     stack_images(offset_band_paths, out_image_path, geometry_mode="intersect")
+    #
+    # # I.R. 20220529 END
 
     # Saving band labels in images
     new_raster = gdal.Open(out_image_path)
@@ -2666,11 +2852,20 @@ def apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=False):
     out_path = build_sen2cor_output_path(image_path, timestamp, version)
     # The application of sen2cor below with the option --GIP_L2A caused an unspecified metadata error in the xml file.
     # Removing it resolves this problem.
-    log.info("calling sen2cor:")
+
+    # I.R. 20220509
+    # log.info("calling sen2cor:")
     log.info(sen2cor_path + " " + image_path + " --output_dir " + out_path)
     sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', out_path],
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     universal_newlines=True)
+
+    # log.info("#I.R. 20220509 Removed explicit setting of --output_dir: calling sen2cor:")
+    # log.info(sen2cor_path + " " + image_path)
+    # sen2cor_proc = subprocess.Popen([sen2cor_path, image_path],
+                                    # stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    # universal_newlines=True)
+
     #log.info(sen2cor_path + " " + image_path + " --output_dir " + os.path.dirname(image_path) + " --GIP_L2A " + gipp_path)
     #sen2cor_proc = subprocess.Popen([sen2cor_path, image_path, '--output_dir', os.path.dirname(image_path),
     #                                 '--GIP_L2A', gipp_path],
@@ -2806,8 +3001,8 @@ def atmospheric_correction(in_directory, out_directory, sen2cor_path, delete_unp
             try:
                 l2_path = apply_sen2cor(image_path, sen2cor_path, delete_unprocessed_image=delete_unprocessed_image)
                 l2_name = os.path.basename(l2_path)
-                #log.info("Changing L2A path: {}".format(l2_path))
-                #log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
+                log.info("Changing L2A path: {}".format(l2_path))
+                log.info("  to new L2A path: {}".format(os.path.join(out_directory, l2_name)))
                 if os.path.exists(l2_path):
                     os.rename(l2_path, os.path.join(out_directory, l2_name))
                 else:
@@ -3212,9 +3407,21 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
     """
 
     if not os.path.exists(report_path):
-        log.info("Report file does not exist yet and will be created: {}".format(report_path))
+        log.info("Report file being created: {}".format(report_path))
         new_class_image = gdal.Open(new_class_path, gdal.GA_ReadOnly)
-        report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=3, datatype=gdal.GDT_Int32)
+
+        #I.R. 20220603 START
+        ## Changed to always generate report from scratch - incremental update is unstable and inflexible
+        ## Any previous reports automatically copied to prefix 'archived_' in tile_based_change_detection_from_cover_maps.py
+        ## Report layer depth extended to 7 bands
+        ## ToDo: Bands MUST be zeroed on creation as they hold state - CHECK GDAL guarantees this
+        ###report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=7, datatype=gdal.GDT_Int32)
+        report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=7, datatype=gdal.GDT_Int16)
+
+        # ORIGINAL
+        # report_image = create_matching_dataset(new_class_image, report_path, format='GTiff', bands=3, datatype=gdal.GDT_Int32)
+        #I.R. 20220603 END
+
         new_class_image = None
         report_image = None
     if not os.path.exists(report_path):
@@ -3319,37 +3526,52 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
             change_image = None
         else:
             log.info("Change raster file already exists: {}. Skipping change raster creation.".format(change_raster))
-        # within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
-        # ensure that the date of the new change layer is AFTER the report file was last updated
-        baseline_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[0]
-        report_last_updated_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[1]
-        new_changes_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(change_raster))[1]
-        # pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
-        if report_last_updated_timestamp > new_changes_timestamp:
-            log.warning("Date of the new change map is not recent enough to update the current report image product: ")
-            log.warning("  report image: {}".format(report_path))
-            log.warning("  last updated: {}".format(report_last_updated_timestamp))
-            log.warning("  change image:  {}".format(change_raster))
-            log.warning("  updated:      {}".format(new_changes_timestamp))
-            log.warning("Skipping updating of report image product.")
-            return change_raster
-        else:
-            log.info("Updating current report image product with the new change map: ")
-            log.info("  report image: {}".format(report_path))
-            log.info("  last updated: {}".format(report_last_updated_timestamp))
-            log.info("  change image:  {}".format(change_raster))
-            log.info("  updated:      {}".format(new_changes_timestamp))
-        #TODO: update name of report_path with new_changes_timestamp
-        tile_id = os.path.basename(report_path).split("_")[2]
-        old_report_path = report_path
-        report_path = os.path.join(os.path.dirname(report_path),
-                                       "report_{}_{}_{}.tif".format(
-                                       baseline_timestamp.strftime("%Y%m%dT%H%M%S"),
-                                       tile_id,
-                                       report_last_updated_timestamp.strftime("%Y%m%dT%H%M%S"))
-                                       )
-        shutil.move(old_report_path, report_path)
-
+        
+# I.R. 20220611 START Section removed - no longer updating report file name incrementally 
+# - now defined once in tile_base_change_detection_from_cover_maps.py
+# =============================================================================
+#         # within this processing loop, update the report layers indicating the length of temporal sequences of confirmed values
+#         # ensure that the date of the new change layer is AFTER the report file was last updated
+#         baseline_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[0]
+#         report_last_updated_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(report_path))[1]
+#         new_changes_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(change_raster))[1]
+#         # pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(new_class_path))
+#         if report_last_updated_timestamp > new_changes_timestamp:
+#             log.warning("Date of the new change map is not recent enough to update the current report image product: ")
+#             log.warning("  report image: {}".format(report_path))
+#             log.warning("  last updated: {}".format(report_last_updated_timestamp))
+#             log.warning("  change image:  {}".format(change_raster))
+#             log.warning("  updated:      {}".format(new_changes_timestamp))
+#             log.warning("Skipping updating of report image product.")
+#             return change_raster
+#         else:
+#             log.info("Updating current report image product with the new change map: ")
+#             log.info("  report image: {}".format(report_path))
+#             log.info("  last updated: {}".format(report_last_updated_timestamp))
+#             log.info("  change image:  {}".format(change_raster))
+#             log.info("  updated:      {}".format(new_changes_timestamp))
+#         #TODO: update name of report_path with new_changes_timestamp
+#         tile_id = os.path.basename(report_path).split("_")[2]
+#         
+#         old_report_path = str(report_path) # str() creates a copy of the string
+#         report_path = os.path.join(os.path.dirname(report_path),
+#                                        "report_{}_{}_{}.tif".format(
+#                                        baseline_timestamp.strftime("%Y%m%dT%H%M%S"),
+#                                        tile_id,
+#                                        new_changes_timestamp.strftime("%Y%m%dT%H%M%S"))
+#                                        )
+#         log.info("  updated report file:      {}".format(report_path))
+#         report_archive_path = os.path.join(os.path.dirname(old_report_path),
+#                                            "archived_"+os.path.basename(old_report_path))
+#         log.info("  archived report file:      {}".format(report_archive_path))
+#         
+#         shutil.copy(old_report_path, report_archive_path)
+#         os.rename(old_report_path, report_path)
+#         
+#   
+# =============================================================================
+# I.R. 20220611 END
+    
         #now update the report file layers
         change_image = gdal.Open(change_raster, gdal.GA_ReadOnly)
         change_array = change_image.GetVirtualMemArray(eAccess=gdal.gdalconst.GF_Read).squeeze()
@@ -3376,14 +3598,41 @@ def __change_from_class_maps(old_class_path, new_class_path, change_raster, chan
         out_report_array[1, locs] = out_report_array[1, locs] + 1
         # layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and
         #   decreasing the counter whenever no change is detected, i.e. change array == 0
-        log.info("layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and")
-        log.info("   decreasing the counter whenever no change is detected, i.e. change array == 0")
-        # increase counter if a change was detected
-        locs = ( change_array > 0 )
+        # log.info("layer 2 counts the number of consecutive change detections, ignoring cloudy observations (change array == -1) and")
+        # log.info("   decreasing the counter whenever no change is detected, i.e. change array == 0")
+
+        #I.R. 20220603 START
+        # Layer 2: Count if no change was detected and first change has already been detected
+        locs = ( (change_array == 0) & (out_report_array[0, :, :] > 0) )
         out_report_array[2, locs] = out_report_array[2, locs] + 1
-        # reset the counter if no change was detected
-        locs = ( change_array == 0 )
-        out_report_array[2, locs] = out_report_array[2, locs] - 1
+        # Compute report measures only for pixels where first change has been detected ( to avoid divide by zero)
+        locs = (out_report_array[0, :, :] > 0)
+        # Layer 3: Total number of valid (no cloud) images for this pixel since first change was detected
+        # = total change + nochange
+        out_report_array[3, locs] = (out_report_array[1, locs] + out_report_array[2, locs])
+        # Layer 4: Probability (percentage) that a change detection is correct
+        # = ratio change/(change +_nochange) for pixels where first change has been detected
+        out_report_array[4, locs] = (100 * out_report_array[1, locs]) / out_report_array[3, locs]
+        # Layer 5: Percentage Probability (Layer 4) binarised by a threshold
+        percentage_probability_threshold = 50  # IF kept as a feature move parameter into .ini file
+        minimum_required_samples_threshold = 5  #  Number of valid images for classifier opinion to be accepted. IF kept as a feature move parameter into .ini file
+        out_report_array[5, :, :] = 0  ## Reset from previous calls (INEFFICIENT! Layers 5 and 6 should be generated in a separate stage after iteration through the change layers has been completed)
+        # locs_binarise = (out_report_array[4, :, :] >= percentage_probability_threshold)
+        locs_binarise = ((out_report_array[4, :, :] >= percentage_probability_threshold) & (out_report_array[3, :, :] >= minimum_required_samples_threshold))
+        log.info(f"out_report_array.shape: {out_report_array.shape}")
+        out_report_array[5, locs_binarise] = 1  # Assumes empty array layer initialised to zero
+        # Layer 6: Layer 0 (first change date) masked by Binarised Percentage Probability (Layer 5)
+        out_report_array[6, :, :] = out_report_array[0, :, :]  * out_report_array[5, :, :]
+
+        # ORIGINAL CODE
+        # increase counter if a change was detected
+        # locs = ( change_array > 0 )
+        # out_report_array[2, locs] = out_report_array[2, locs] + 1
+        # # reset the counter if no change was detected
+        # locs = ( change_array == 0 )
+        # out_report_array[2, locs] = out_report_array[2, locs] - 1
+
+        #I.R. 20220603 END
         change_array = None
         change_image = None
         out_report_array = None

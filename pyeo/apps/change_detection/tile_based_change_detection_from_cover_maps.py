@@ -479,6 +479,18 @@ def rolling_detection(config_path,
                                                               haze=None,
                                                               epsg=epsg,
                                                               skip_existing=skip_existing)
+                # I.R. 20220607 START
+                # Apply offset to any images of processing baseline 0400 in the composite cloud_masked folder
+                log.info("---------------------------------------------------------------")
+                log.info("Offsetting cloud masked L2A images for composite.")
+                log.info("---------------------------------------------------------------")
+
+                pyeo.raster_manipulation.apply_processing_baseline_0400_offset_correction_to_tiff_file_directory(composite_l2_masked_image_dir, composite_l2_masked_image_dir)
+
+                log.info("---------------------------------------------------------------")
+                log.info("Offsetting of cloud masked L2A images for composite complete.")
+                log.info("---------------------------------------------------------------")
+                # I.R. 20220607 END
 
             if do_quicklooks or do_all:
                 log.info("---------------------------------------------------------------")
@@ -769,6 +781,19 @@ def rolling_detection(config_path,
             log.info("Cloud masking and band stacking of new L2A images are complete.")
             log.info("---------------------------------------------------------------")
 
+            # I.R. 20220607 START
+            # Apply offset to any images of processing baseline 0400 in the composite cloud_masked folder
+            log.info("---------------------------------------------------------------")
+            log.info("Offsetting cloud masked L2A images.")
+            log.info("---------------------------------------------------------------")
+
+            pyeo.raster_manipulation.apply_processing_baseline_0400_offset_correction_to_tiff_file_directory(l2_masked_image_dir, l2_masked_image_dir)
+
+            log.info("---------------------------------------------------------------")
+            log.info("Offsetting of cloud masked L2A images complete.")
+            log.info("---------------------------------------------------------------")
+            # I.R. 20220607 END
+
             if do_quicklooks or do_all:
                 log.info("---------------------------------------------------------------")
                 log.info("Producing quicklooks.")
@@ -952,34 +977,60 @@ def rolling_detection(config_path,
 
             if do_dev: # set the name of the report file in the development version run
                 before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
-                after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[0]))
+                #I.R. 20220611 START
+                ## Timestamp report with the date of most recent classified image that contributes to it
+                after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[-1]))
+                ## ORIGINAL
+                # gets timestamp of the earliest change image of those available in class_image_path
+                # after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(class_image_paths[0]))
+                #I.R. 20220611 END
                 output_product = os.path.join(probability_image_dir,
                                               "report_{}_{}_{}.tif".format(
                                               before_timestamp.strftime("%Y%m%dT%H%M%S"),
                                               tile_id,
                                               after_timestamp.strftime("%Y%m%dT%H%M%S"))
                                               )
-                # if a report file exists, rename it to show it has been updated
+                log.info("I.R. Report file name will be {}".format(output_product))
+                
+                # if a report file exists, archive it  ( I.R. Changed from 'rename it to show it has been updated')
                 n_report_files = len([ f for f in os.scandir(probability_image_dir) if f.is_file() \
                                        and f.name.startswith("report_") \
                                        and f.name.endswith(".tif")])
 
                 if n_report_files > 0:
+                    # I.R. ToDo: Should iterate over output_product_existing in case more than one report file is present (though unlikely)
                     output_product_existing = [ f.path for f in os.scandir(probability_image_dir) if f.is_file() \
                                                 and f.name.startswith("report_") \
                                                 and f.name.endswith(".tif")][0]
                     log.info("Found existing report image product: {}".format(output_product_existing))
-                    report_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(output_product_existing))[1]
-                    if report_timestamp < after_timestamp:
-                        log.info("Report timestamp {}".format(report_timestamp.strftime("%Y%m%dT%H%M%S")))
-                        log.info(" is earlier than {}".format(after_timestamp.strftime("%Y%m%dT%H%M%S")))
-                        log.info("Updating its file name to: {}".format(output_product))
-                        os.rename(output_product_existing, output_product)
+                    #I.R. 20220610 START
+                    ## Mark existing reports as 'archive_' 
+                    ## - do not try and extend upon existing reports
+                    ## - calls to __change_from_class_maps below will build a report incorporating all new AND pre-existing change maps
+                    ## - this might be the cause of the error in report generation that caused over-range and periodicity in the histogram - as reported to Heiko by email
+                    # report_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(output_product_existing))[1]
+                    # if report_timestamp < after_timestamp:
+                        # log.info("Report timestamp {}".format(report_timestamp.strftime("%Y%m%dT%H%M%S")))
+                        # log.info(" is earlier than {}".format(after_timestamp.strftime("%Y%m%dT%H%M%S")))
+                        # log.info("Updating its file name to: {}".format(output_product))
+                        # os.rename(output_product_existing, output_product)
+                    
+                    # Renaming any pre-existing report file with prefix 'archive_' 
+                    ## it will therefore not be detected in __change_from_class_maps which will therefore create a new report file
+                    
+                    output_product_existing_archived = os.path.join(os.path.dirname(output_product_existing), 'archived_' + os.path.basename(output_product_existing))
+                    log.info("Renaming existing report image product to: {}".format(output_product_existing_archived))
+                    os.rename(output_product_existing, output_product_existing_archived)
+
+                    #I.R. 20220610 END
 
             # find change patterns in the stack of classification images
             for index, image in enumerate(class_image_paths):
                 before_timestamp = pyeo.filesystem_utilities.get_change_detection_dates(os.path.basename(latest_class_composite_path))[0]
                 after_timestamp  = pyeo.filesystem_utilities.get_image_acquisition_time(os.path.basename(image))
+                #I.R. 20220612 START
+                log.info("  class image index: {} of {}".format(index, len(class_image_paths)))
+                #I.R. 20220612 END
                 log.info("  early time stamp: {}".format(before_timestamp))
                 log.info("  late  time stamp: {}".format(after_timestamp))
                 change_raster = os.path.join(probability_image_dir,
@@ -995,7 +1046,7 @@ def rolling_detection(config_path,
                     #TODO: In change_from_class_maps(), add a flag (e.g. -1) whether a pixel was a cloud in the later image.
                     # Applying check whether dNDVI < -0.2, i.e. greenness has decreased over changed areas
 
-                    log.info("Includes a rolling update of the report image product based on each new change detection image.")
+                    log.info("Update of the report image product based on change detection image.")
                     pyeo.raster_manipulation.__change_from_class_maps(latest_class_composite_path,
                                                                 image,
                                                                 change_raster,
@@ -1017,6 +1068,15 @@ def rolling_detection(config_path,
                                                                 change_to = to_classes,
                                                                 skip_existing = skip_existing
                                                                 )
+
+            # I.R. ToDo: Insert new report_analysis function to generate additional computed layers derived 
+            # from the outputs of iteration through change image set above
+            # E.g. :
+                # binarisation
+                # area analysis and filtering
+                # region labelling and highlightinh
+
+
 
             log.info("---------------------------------------------------------------")
             log.info("Post-classification change detection complete.")
